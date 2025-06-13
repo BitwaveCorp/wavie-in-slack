@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -106,6 +107,12 @@ func (r *Retriever) ClearAgentCache(agentID string) {
 	delete(r.cache, agentID)
 }
 
+// Rough estimate of tokens per character for Claude API
+const tokensPerChar = 0.25
+
+// Maximum knowledge context size in tokens (to leave room for conversation)
+const maxKnowledgeTokens = 50000
+
 // GetKnowledgeContext returns a formatted context string with all knowledge for an agent
 func (r *Retriever) GetKnowledgeContext(agentID string) (string, error) {
 	content, err := r.GetKnowledgeForAgent(agentID)
@@ -121,11 +128,38 @@ func (r *Retriever) GetKnowledgeContext(agentID string) (string, error) {
 	var builder strings.Builder
 	builder.WriteString("# Knowledge Base\n\n")
 	
+	// Track estimated token count
+	tokenCount := int(math.Round(float64(len("# Knowledge Base\n\n")) * tokensPerChar))
+	
 	for i, doc := range content {
-		builder.WriteString(fmt.Sprintf("## Document %d\n\n", i+1))
+		// Estimate tokens for this document and headers
+		docHeader := fmt.Sprintf("## Document %d\n\n", i+1)
+		docFooter := "\n\n---\n\n"
+		docHeaderTokens := int(math.Round(float64(len(docHeader)) * tokensPerChar))
+		docFooterTokens := int(math.Round(float64(len(docFooter)) * tokensPerChar))
+		docTokens := int(math.Round(float64(len(doc)) * tokensPerChar))
+		
+		// Check if adding this document would exceed the token limit
+		if tokenCount + docHeaderTokens + docTokens + docFooterTokens > maxKnowledgeTokens {
+			// Add a note that some content was truncated
+			truncationNote := fmt.Sprintf("\n\n*Note: %d additional documents were omitted due to token limits.*\n", len(content)-i)
+			builder.WriteString(truncationNote)
+			r.logger.Warn("Knowledge context truncated due to token limit", "agent_id", agentID, 
+				"included_docs", i, "total_docs", len(content), "estimated_tokens", tokenCount)
+			break
+		}
+		
+		// Add this document
+		builder.WriteString(docHeader)
 		builder.WriteString(doc)
-		builder.WriteString("\n\n---\n\n")
+		builder.WriteString(docFooter)
+		
+		// Update token count
+		tokenCount += docHeaderTokens + docTokens + docFooterTokens
 	}
+	
+	r.logger.Info("Knowledge context prepared", "agent_id", agentID, "docs_count", len(content), 
+		"estimated_tokens", tokenCount, "estimated_chars", builder.Len())
 	
 	return builder.String(), nil
 }

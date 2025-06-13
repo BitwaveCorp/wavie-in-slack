@@ -25,14 +25,21 @@ type Store struct {
 	mutex         sync.RWMutex
 	maxMessages   int
 	maxAge        time.Duration
+	maxMessageLen int // Maximum length of a single message in characters
 }
 
 // NewStore creates a new conversation store with specified limits
 func NewStore(maxMessages int, maxAge time.Duration) *Store {
+	return NewStoreWithMessageLimit(maxMessages, maxAge, 1000) // Default 1000 char limit
+}
+
+// NewStoreWithMessageLimit creates a new conversation store with message length limit
+func NewStoreWithMessageLimit(maxMessages int, maxAge time.Duration, maxMessageLen int) *Store {
 	store := &Store{
 		conversations: make(map[string]*ConversationContext),
 		maxMessages:   maxMessages,
 		maxAge:        maxAge,
+		maxMessageLen: maxMessageLen,
 	}
 
 	// Start cleanup routine
@@ -72,10 +79,16 @@ func (s *Store) AddMessage(threadID, role, content string) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
+	// Truncate content if it exceeds max length
+	truncatedContent := content
+	if len(content) > s.maxMessageLen {
+		truncatedContent = content[:s.maxMessageLen] + "... [message truncated]"
+	}
+
 	// Add new message
 	context.Messages = append(context.Messages, Message{
 		Role:      role,
-		Content:   content,
+		Content:   truncatedContent,
 		Timestamp: time.Now(),
 	})
 

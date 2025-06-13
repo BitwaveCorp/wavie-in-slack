@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"time"
 )
@@ -45,6 +46,18 @@ func (c *Client) ChatCompletion(ctx context.Context, userMessage, correlationID 
 	return c.sendChatRequest(ctx, messages, correlationID)
 }
 
+// Maximum number of conversation turns to include in history
+const maxConversationTurns = 5
+
+// Rough estimate of tokens per character for Claude API
+const tokensPerChar = 0.25
+
+// Maximum total tokens for Claude API
+const maxTotalTokens = 200000
+
+// Reserve tokens for system message, current message, and response
+const reservedTokens = 10000
+
 // ChatCompletionWithHistory sends a message to OpenAI with conversation history and optional knowledge context
 func (c *Client) ChatCompletionWithHistory(ctx context.Context, userMessage string, history []Message, correlationID string, knowledgeContext string) (string, error) {
 	// Create system message with optional knowledge context
@@ -55,6 +68,15 @@ func (c *Client) ChatCompletionWithHistory(ctx context.Context, userMessage stri
 		systemMessage += "\n\nUse the following knowledge base to help answer the user's question. If the knowledge base doesn't contain relevant information, use your general knowledge but make it clear when you're doing so.\n\n" + knowledgeContext
 	}
 
+	// Estimate system message tokens
+	systemTokens := int(math.Round(float64(len(systemMessage)) * tokensPerChar))
+	
+	// Estimate current user message tokens
+	userMessageTokens := int(math.Round(float64(len(userMessage)) * tokensPerChar))
+	
+	// Calculate available tokens for history
+	availableHistoryTokens := maxTotalTokens - systemTokens - userMessageTokens - reservedTokens
+	
 	// Start with system message
 	messages := []Message{
 		{
@@ -63,10 +85,46 @@ func (c *Client) ChatCompletionWithHistory(ctx context.Context, userMessage stri
 		},
 	}
 
-	// Add conversation history if available
+	// Add conversation history if available, but limit it
 	if len(history) > 0 {
-		c.logger.Info("Adding conversation history", "history_length", len(history))
-		messages = append(messages, history...)
+		// If history is too long, truncate it
+		if len(history) > maxConversationTurns*2 { // *2 because each turn has user + assistant message
+			c.logger.Info("Truncating conversation history due to turn limit", 
+				"original_length", len(history), 
+				"max_turns", maxConversationTurns,
+				"new_length", maxConversationTurns*2)
+			
+			// Keep only the most recent messages
+			history = history[len(history)-(maxConversationTurns*2):]
+		}
+		
+		// Now check token limits
+		var selectedHistory []Message
+		historyTokens := 0
+		
+		// Start from most recent and work backwards
+		for i := len(history) - 1; i >= 0; i-- {
+			msgTokens := int(math.Round(float64(len(history[i].Content)) * tokensPerChar))
+			
+			if historyTokens + msgTokens > availableHistoryTokens {
+				c.logger.Info("Truncating conversation history due to token limit", 
+					"included_messages", len(selectedHistory), 
+					"total_messages", len(history),
+					"estimated_tokens", historyTokens)
+				break
+			}
+			
+			// Add this message to the selected history (at the beginning since we're going backwards)
+			selectedHistory = append([]Message{{Role: history[i].Role, Content: history[i].Content}}, selectedHistory...)
+			historyTokens += msgTokens
+		}
+		
+		c.logger.Info("Adding conversation history", 
+			"original_length", len(history), 
+			"included_length", len(selectedHistory), 
+			"estimated_tokens", historyTokens)
+			
+		messages = append(messages, selectedHistory...)
 	}
 
 	// Add the current user message

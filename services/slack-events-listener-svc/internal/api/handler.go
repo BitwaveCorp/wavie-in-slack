@@ -31,11 +31,12 @@ type Handler struct {
 	processedEvents     map[string]bool
 	eventsMutex         sync.RWMutex
 	conversationStore   *conversation.Store
+	agentID             string // The agent ID for this bot instance
 }
 
-func NewHandler(slackClient *slack.Client, signingSecret, claudeProxyServiceURL, broadcastServiceURL string, logger *slog.Logger) *Handler {
-	// Create conversation store with 20 message limit and 1 hour max age
-	conversationStore := conversation.NewStore(20, 1*time.Hour)
+func NewHandler(slackClient *slack.Client, signingSecret, claudeProxyServiceURL, broadcastServiceURL, agentID string, logger *slog.Logger) *Handler {
+	// Create conversation store with 10 message limit, 15 minutes max age, and 500 character limit per message
+	conversationStore := conversation.NewStoreWithMessageLimit(10, 15*time.Minute, 500)
 
 	return &Handler{
 		slackClient:         slackClient,
@@ -45,6 +46,7 @@ func NewHandler(slackClient *slack.Client, signingSecret, claudeProxyServiceURL,
 		logger:              logger,
 		processedEvents:     make(map[string]bool),
 		conversationStore:   conversationStore,
+		agentID:             agentID,
 	}
 }
 
@@ -323,6 +325,9 @@ func (h *Handler) handleAppMention(eventReq slack.EventRequest) {
 	// Convert conversation.Message to slack.ConversationMessage
 	slackConversationHistory := convertToSlackMessages(conversationHistory)
 
+	// Use the agent ID associated with this bot instance
+	h.logger.Info("Using configured agent for request", "agent_id", h.agentID, "correlation_id", correlationID)
+	
 	claudeReq := slack.ClaudeRequest{
 		Message:            message,
 		UserID:             eventReq.Event.User,
@@ -331,6 +336,7 @@ func (h *Handler) handleAppMention(eventReq slack.EventRequest) {
 		ThreadTS:           threadID,
 		ConversationHistory: slackConversationHistory,
 		CorrelationID:      correlationID,
+		AgentID:            h.agentID,
 	}
 
 	claudeResp, err := h.callClaudeService(claudeReq)
