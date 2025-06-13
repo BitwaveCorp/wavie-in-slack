@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -398,7 +399,22 @@ func (h *Handler) callClaudeService(req slack.ClaudeRequest) (slack.ClaudeRespon
 
 	httpReq.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{Timeout: 60 * time.Second}
+	// Create a custom transport with increased timeouts
+	transport := &http.Transport{
+		TLSHandshakeTimeout:   30 * time.Second,
+		DialContext: (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		ResponseHeaderTimeout: 30 * time.Second,
+	}
+
+	client := &http.Client{
+		Timeout:   90 * time.Second,
+		Transport: transport,
+	}
 	resp, err := client.Do(httpReq)
 	if err != nil {
 		return slack.ClaudeResponse{}, fmt.Errorf("failed to send request: %w", err)
