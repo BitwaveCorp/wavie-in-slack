@@ -50,9 +50,11 @@ func main() {
 
 	// Initialize knowledge management system if enabled
 	var knowledgeRetriever *knowledge.Retriever
+	var storageManager *knowledge.StorageManager
 	if cfg.KnowledgeEnabled {
 		// Create knowledge storage manager
-		storageManager, err := knowledge.NewStorageManager(cfg.KnowledgeBasePath, logger)
+		var err error
+		storageManager, err = knowledge.NewStorageManager(cfg.KnowledgeBasePath, logger)
 		if err != nil {
 			slog.Error("Failed to initialize knowledge storage manager", "error", err)
 			os.Exit(1)
@@ -60,9 +62,6 @@ func main() {
 
 		// Create knowledge retriever
 		knowledgeRetriever = knowledge.NewRetriever(storageManager, logger)
-
-		// Create knowledge handler
-		knowledgeHandler := knowledge.NewHandler(storageManager, logger)
 
 		// Log successful initialization
 		slog.Info("Knowledge management system initialized", "base_path", cfg.KnowledgeBasePath)
@@ -75,7 +74,7 @@ func main() {
 	handler.RegisterRoutes(mux)
 	
 	// Register knowledge management routes if enabled
-	if cfg.KnowledgeEnabled {
+	if cfg.KnowledgeEnabled && storageManager != nil {
 		knowledgeHandler := knowledge.NewHandler(storageManager, logger)
 		knowledgeHandler.RegisterRoutes(mux)
 		slog.Info("Knowledge management API routes registered")
