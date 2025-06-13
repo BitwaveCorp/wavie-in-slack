@@ -80,8 +80,11 @@ func (h *Handler) handleChatCompletion(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
 	defer cancel()
 
+	// Convert ConversationMessage to openai.Message
+	openaiMessages := convertToOpenAIMessages(req.ConversationHistory)
+
 	// Use conversation history if available
-	response, err := h.openaiClient.ChatCompletionWithHistory(ctx, req.Message, req.ConversationHistory, req.CorrelationID)
+	response, err := h.openaiClient.ChatCompletionWithHistory(ctx, req.Message, openaiMessages, req.CorrelationID)
 	if err != nil {
 		h.logger.Error("Failed to get chat completion", "error", err, "correlation_id", req.CorrelationID)
 
@@ -106,4 +109,20 @@ func (h *Handler) handleChatCompletion(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(gptResp)
 
 	h.logger.Info("Successfully processed chat completion", "correlation_id", req.CorrelationID)
+}
+
+func (h *Handler) SetupRoutes(router *http.ServeMux) {
+	router.HandleFunc("/api/v1/chat", h.HandleChat)
+}
+
+// Helper function to convert ConversationMessage to openai.Message
+func convertToOpenAIMessages(messages []ConversationMessage) []openai.Message {
+	openaiMessages := make([]openai.Message, len(messages))
+	for i, msg := range messages {
+		openaiMessages[i] = openai.Message{
+			Role:    msg.Role,
+			Content: msg.Content,
+		}
+	}
+	return openaiMessages
 }
