@@ -44,10 +44,11 @@ func main() {
 		"port", cfg.Port,
 		"claude_proxy_url", cfg.ClaudeProxyServiceURL,
 		"broadcast_url", cfg.BroadcastServiceURL,
+		"agent_id", cfg.AgentID,
 	)
 
 	slackClient := slack.NewClient(cfg.SlackBotToken, logger)
-	handler := api.NewHandler(slackClient, cfg.SlackSigningSecret, cfg.ClaudeProxyServiceURL, cfg.BroadcastServiceURL, logger)
+	handler := api.NewHandler(slackClient, cfg.SlackSigningSecret, cfg.ClaudeProxyServiceURL, cfg.BroadcastServiceURL, cfg.AgentID, logger)
 
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux)

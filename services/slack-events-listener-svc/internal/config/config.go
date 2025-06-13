@@ -9,4 +9,7 @@ type Config struct {
 
 	ClaudeProxyServiceURL  string `envconfig:"CLAUDE_PROXY_SERVICE_URL" required:"true"`
 	BroadcastServiceURL string `envconfig:"BROADCAST_SERVICE_URL" required:"true"`
+	
+	// The agent ID to use for this bot instance
+	AgentID string `envconfig:"AGENT_ID" default:"wavie-bot"`
 }

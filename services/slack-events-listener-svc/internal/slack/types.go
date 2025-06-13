@@ -70,6 +70,7 @@ type ClaudeRequest struct {
 	ThreadTS           string               `json:"thread_ts,omitempty"`
 	ConversationHistory []ConversationMessage `json:"conversation_history,omitempty"`
 	CorrelationID      string               `json:"correlation_id"`
+	AgentID            string               `json:"agent_id,omitempty"`
 }
 
 type ClaudeResponse struct {
