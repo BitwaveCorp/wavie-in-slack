@@ -131,7 +131,21 @@ func (h *Handler) handleListAgents(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 }
 
-// Using types from types.go
+// CreateAgentRequest represents a request to create a new agent
+type CreateAgentRequest struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	TenantID    string `json:"tenant_id"`
+}
+
+// CreateAgentResponse represents a response to a create agent request
+type CreateAgentResponse struct {
+	Success bool   `json:"success"`
+	Agent   *Agent `json:"agent,omitempty"`
+	AgentID string `json:"agent_id,omitempty"`
+	Error   string `json:"error,omitempty"`
+}
 
 // handleCreateAgent handles creating a new agent
 func (h *Handler) handleCreateAgent(w http.ResponseWriter, r *http.Request) {

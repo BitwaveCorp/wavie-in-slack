@@ -53,5 +53,7 @@ type ListFilesResponse struct {
 
 // ListAgentsResponse represents a response to a list agents request
 type ListAgentsResponse struct {
-	Agents []Agent `json:"agents"`
+	Agents  []Agent `json:"agents"`
 }
+
+// Agent request/response types moved to handler.go
