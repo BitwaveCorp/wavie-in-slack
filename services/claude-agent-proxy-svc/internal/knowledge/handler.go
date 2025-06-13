@@ -26,10 +26,11 @@ func NewHandler(storageManager *StorageManager, logger *slog.Logger) *Handler {
 
 // RegisterRoutes registers the knowledge management routes
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("/knowledge", h.handleUI)
 	mux.HandleFunc("/api/knowledge/upload", h.handleUpload)
 	mux.HandleFunc("/api/knowledge/files", h.handleListFiles)
+	mux.HandleFunc("/api/knowledge/files/delete", h.handleDeleteFile)
 	mux.HandleFunc("/api/knowledge/agents", h.handleListAgents)
-	mux.HandleFunc("/knowledge", h.handleUI)
 }
 
 // handleUpload handles file uploads
@@ -108,6 +109,58 @@ func (h *Handler) handleListFiles(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(ListFilesResponse{
 		Files: files,
+	})
+}
+
+// DeleteFileRequest represents a request to delete a knowledge file
+type DeleteFileRequest struct {
+	ID string `json:"id"`
+}
+
+// DeleteFileResponse represents a response to a delete file request
+type DeleteFileResponse struct {
+	Success bool   `json:"success"`
+	Error   string `json:"error,omitempty"`
+}
+
+// handleDeleteFile handles deleting a knowledge file
+func (h *Handler) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Parse request body
+	var req DeleteFileRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.logger.Error("Failed to parse request body", "error", err)
+		http.Error(w, "Failed to parse request body", http.StatusBadRequest)
+		return
+	}
+
+	// Validate request
+	if req.ID == "" {
+		http.Error(w, "File ID is required", http.StatusBadRequest)
+		return
+	}
+
+	// Delete file
+	err := h.storageManager.DeleteKnowledgeFile(req.ID)
+	if err != nil {
+		h.logger.Error("Failed to delete knowledge file", "error", err)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(DeleteFileResponse{
+			Success: false,
+			Error:   err.Error(),
+		})
+		return
+	}
+
+	// Return success response
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(DeleteFileResponse{
+		Success: true,
 	})
 }
 
@@ -274,6 +327,17 @@ func (h *Handler) handleUI(w http.ResponseWriter, r *http.Request) {
             from {opacity: 0;}
             to {opacity: 1;}
         }
+        .delete-btn {
+            background-color: #f44336;
+            color: white;
+            border: none;
+            padding: 5px 10px;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .delete-btn:hover {
+            background-color: #d32f2f;
+        }
     </style>
 </head>
 <body>
@@ -431,14 +495,14 @@ func (h *Handler) handleUI(w http.ResponseWriter, r *http.Request) {
                     }
                     
                     let html = '<table>';
-                    html += '<tr><th>Name</th><th>Description</th><th>Agents</th><th>Uploaded</th><th>Size</th></tr>';
+                    html += '<tr><th>Name</th><th>Description</th><th>Agents</th><th>Uploaded</th><th>Size</th><th>Actions</th></tr>';
                     
                     data.files.forEach(file => {
                         const date = new Date(file.uploaded_at);
                         const formattedDate = date.toLocaleDateString() + ' ' + date.toLocaleTimeString();
                         const fileSize = (file.file_size / 1024).toFixed(2) + ' KB';
                         
-                        html += '<tr><td>' + file.name + '</td><td>' + (file.description || '') + '</td><td>' + file.agent_ids.join(', ') + '</td><td>' + formattedDate + '</td><td>' + fileSize + '</td></tr>';
+                        html += '<tr><td>' + file.name + '</td><td>' + (file.description || '') + '</td><td>' + file.agent_ids.join(', ') + '</td><td>' + formattedDate + '</td><td>' + fileSize + '</td><td><button class="delete-btn" data-id="' + file.id + '">Delete</button></td></tr>';
                     });
                     
                     html += '</table>';
@@ -524,6 +588,41 @@ func (h *Handler) handleUI(w http.ResponseWriter, r *http.Request) {
                 console.error('Error creating agent:', error);
                 alert('Failed to create agent: ' + error.message);
             });
+        });
+        
+        // Handle file deletion
+        document.addEventListener('click', function(e) {
+            if (e.target && e.target.classList.contains('delete-btn')) {
+                if (confirm('Are you sure you want to delete this knowledge file?')) {
+                    const fileId = e.target.getAttribute('data-id');
+                    
+                    fetch('/api/knowledge/files/delete', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({ id: fileId })
+                    })
+                    .then(response => {
+                        if (!response.ok) {
+                            throw new Error('Delete failed');
+                        }
+                        return response.json();
+                    })
+                    .then(data => {
+                        if (data.success) {
+                            alert('File deleted successfully!');
+                            loadFiles();
+                        } else {
+                            throw new Error(data.error || 'Unknown error');
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error deleting file:', error);
+                        alert('Failed to delete file: ' + error.message);
+                    });
+                }
+            }
         });
         
         // Initial load

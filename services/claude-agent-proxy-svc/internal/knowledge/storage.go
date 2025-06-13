@@ -251,6 +251,56 @@ func (sm *StorageManager) GetAllKnowledgeFiles() []KnowledgeFile {
 	return files
 }
 
+// GetKnowledgeFile returns a knowledge file by ID
+func (sm *StorageManager) GetKnowledgeFile(id string) (*KnowledgeFile, error) {
+	for _, file := range sm.registry.KnowledgeFiles {
+		if file.ID == id {
+			return &file, nil
+		}
+	}
+	return nil, fmt.Errorf("knowledge file not found: %s", id)
+}
+
+// DeleteKnowledgeFile deletes a knowledge file by ID
+func (sm *StorageManager) DeleteKnowledgeFile(id string) error {
+	// Find the file in the registry
+	var fileIndex int = -1
+	var filePath string
+	for i, file := range sm.registry.KnowledgeFiles {
+		if file.ID == id {
+			fileIndex = i
+			filePath = file.FilePath
+			break
+		}
+	}
+
+	if fileIndex == -1 {
+		return fmt.Errorf("knowledge file not found: %s", id)
+	}
+
+	// Remove the file from the registry
+	sm.registry.KnowledgeFiles = append(
+		sm.registry.KnowledgeFiles[:fileIndex],
+		sm.registry.KnowledgeFiles[fileIndex+1:]...,
+	)
+
+	// Save the updated registry
+	err := sm.saveRegistry()
+	if err != nil {
+		return fmt.Errorf("failed to save registry: %w", err)
+	}
+
+	// Delete the file directory if it exists
+	if filePath != "" {
+		err = os.RemoveAll(filePath)
+		if err != nil {
+			return fmt.Errorf("failed to delete file directory: %w", err)
+		}
+	}
+
+	return nil
+}
+
 // GetAllAgents returns all agents
 func (sm *StorageManager) GetAllAgents() []Agent {
 	sm.mutex.RLock()
