@@ -167,7 +167,7 @@ func (h *Handler) ProcessEvent(w http.ResponseWriter, r *http.Request) {
 // handleReactionAdded processes reaction events for feedback
 func (h *Handler) handleReactionAdded(eventReq slack.EventRequest) {
 	// Only process thumbs up/down reactions
-	if eventReq.Event.Reaction != "+1" && eventReq.Event.Reaction != "-1" {
+	if eventReq.Event.Reaction.Reaction != "+1" && eventReq.Event.Reaction.Reaction != "-1" {
 		return
 	}
 
@@ -180,7 +180,7 @@ func (h *Handler) handleReactionAdded(eventReq slack.EventRequest) {
 
 	// Determine feedback type
 	feedbackType := "positive"
-	if eventReq.Event.Reaction == "-1" {
+	if eventReq.Event.Reaction.Reaction == "-1" {
 		feedbackType = "negative"
 	}
 
@@ -297,13 +297,16 @@ func (h *Handler) handleAppMention(eventReq slack.EventRequest) {
 	// Get conversation history for this thread
 	conversationHistory := h.conversationStore.GetMessages(threadID)
 
+	// Convert conversation.Message to slack.ConversationMessage
+	slackConversationHistory := convertToSlackMessages(conversationHistory)
+
 	claudeReq := slack.ClaudeRequest{
 		Message:            message,
 		UserID:             eventReq.Event.User,
 		ChannelID:          eventReq.Event.Channel,
 		MessageTS:          eventReq.Event.TS,
 		ThreadTS:           threadID,
-		ConversationHistory: conversationHistory,
+		ConversationHistory: slackConversationHistory,
 		CorrelationID:      correlationID,
 	}
 
@@ -348,15 +351,20 @@ func (h *Handler) handleAppMention(eventReq slack.EventRequest) {
 	go h.callBroadcastService(broadcastReq)
 }
 
-func (h *Handler) callClaudeService(req slack.ClaudeRequest) (*slack.ClaudeResponse, error) {
-	jsonData, err := json.Marshal(req)
+func (h *Handler) callClaudeService(req slack.ClaudeRequest) (slack.ClaudeResponse, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	url := h.claudeProxyServiceURL + "/api/chat"
+
+	reqBody, err := json.Marshal(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal GPT request: %w", err)
+		return slack.ClaudeResponse{}, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequest("POST", h.claudeProxyServiceURL+"/api/chat", bytes.NewBuffer(jsonData))
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(reqBody))
 	if err != nil {
-		return nil, fmt.Errorf("failed to create GPT request: %w", err)
+		return slack.ClaudeResponse{}, fmt.Errorf("failed to create request: %w", err)
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
@@ -364,21 +372,21 @@ func (h *Handler) callClaudeService(req slack.ClaudeRequest) (*slack.ClaudeRespo
 	client := &http.Client{Timeout: 60 * time.Second}
 	resp, err := client.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("failed to call GPT service: %w", err)
+		return slack.ClaudeResponse{}, fmt.Errorf("failed to send request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("GPT service error: %d - %s", resp.StatusCode, string(body))
+		return slack.ClaudeResponse{}, fmt.Errorf("unexpected status code: %d, body: %s", resp.StatusCode, string(body))
 	}
 
 	var claudeResp slack.ClaudeResponse
 	if err := json.NewDecoder(resp.Body).Decode(&claudeResp); err != nil {
-		return nil, fmt.Errorf("failed to decode GPT response: %w", err)
+		return slack.ClaudeResponse{}, fmt.Errorf("failed to decode response: %w", err)
 	}
 
-	return &claudeResp, nil
+	return claudeResp, nil
 }
 
 func (h *Handler) callBroadcastService(req slack.BroadcastRequest) {
@@ -406,9 +414,19 @@ func (h *Handler) callBroadcastService(req slack.BroadcastRequest) {
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		h.logger.Error("Broadcast service error", "status", resp.StatusCode, "body", string(body), "correlation_id", req.CorrelationID)
-		return
+		h.logger.Error("Broadcast service error", "status_code", resp.StatusCode, "body", string(body), "correlation_id", req.CorrelationID)
 	}
+}
 
-	h.logger.Info("Successfully sent to broadcast service", "correlation_id", req.CorrelationID)
+// Helper function to convert conversation.Message to slack.ConversationMessage
+func convertToSlackMessages(messages []conversation.Message) []slack.ConversationMessage {
+	slackMessages := make([]slack.ConversationMessage, len(messages))
+	for i, msg := range messages {
+		slackMessages[i] = slack.ConversationMessage{
+			Role:      msg.Role,
+			Content:   msg.Content,
+			Timestamp: msg.Timestamp,
+		}
+	}
+	return slackMessages
 }
