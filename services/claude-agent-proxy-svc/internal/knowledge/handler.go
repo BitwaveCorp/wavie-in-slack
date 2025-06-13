@@ -120,7 +120,6 @@ func (h *Handler) handleListAgents(w http.ResponseWriter, r *http.Request) {
 		// Return agents
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(ListAgentsResponse{
-			Success: true,
 			Agents:  agents,
 		})
 		return
@@ -131,6 +130,8 @@ func (h *Handler) handleListAgents(w http.ResponseWriter, r *http.Request) {
 
 	http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 }
+
+// Using types from types.go
 
 // handleCreateAgent handles creating a new agent
 func (h *Handler) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
