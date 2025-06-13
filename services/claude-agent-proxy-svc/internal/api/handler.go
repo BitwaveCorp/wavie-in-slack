@@ -111,8 +111,9 @@ func (h *Handler) handleChatCompletion(w http.ResponseWriter, r *http.Request) {
 	h.logger.Info("Successfully processed chat completion", "correlation_id", req.CorrelationID)
 }
 
+// SetupRoutes is deprecated, use RegisterRoutes instead
 func (h *Handler) SetupRoutes(router *http.ServeMux) {
-	router.HandleFunc("/api/v1/chat", h.HandleChat)
+	// This function is not used, the actual route registration is done in RegisterRoutes
 }
 
 // Helper function to convert ConversationMessage to openai.Message
