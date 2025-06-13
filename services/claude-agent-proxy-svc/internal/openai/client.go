@@ -45,13 +45,21 @@ func (c *Client) ChatCompletion(ctx context.Context, userMessage, correlationID 
 	return c.sendChatRequest(ctx, messages, correlationID)
 }
 
-// ChatCompletionWithHistory sends a message to OpenAI with conversation history
-func (c *Client) ChatCompletionWithHistory(ctx context.Context, userMessage string, history []Message, correlationID string) (string, error) {
+// ChatCompletionWithHistory sends a message to OpenAI with conversation history and optional knowledge context
+func (c *Client) ChatCompletionWithHistory(ctx context.Context, userMessage string, history []Message, correlationID string, knowledgeContext string) (string, error) {
+	// Create system message with optional knowledge context
+	systemMessage := "You are Wavie, a helpful AI assistant for Bitwave. You provide clear, concise, and helpful responses to user questions. Keep your responses professional but friendly."
+	
+	// Add knowledge context if available
+	if knowledgeContext != "" {
+		systemMessage += "\n\nUse the following knowledge base to help answer the user's question. If the knowledge base doesn't contain relevant information, use your general knowledge but make it clear when you're doing so.\n\n" + knowledgeContext
+	}
+
 	// Start with system message
 	messages := []Message{
 		{
 			Role:    "system",
-			Content: "You are Wavie, a helpful AI assistant for Bitwave. You provide clear, concise, and helpful responses to user questions. Keep your responses professional but friendly.",
+			Content: systemMessage,
 		},
 	}
 

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/BitwaveCorp/slack-wavie-bot-system-upgraded/services/claude-agent-proxy-svc/internal/knowledge"
 	"github.com/BitwaveCorp/slack-wavie-bot-system-upgraded/services/claude-agent-proxy-svc/internal/openai"
 )
 
@@ -24,6 +25,7 @@ type GPTRequest struct {
 	ThreadTS           string               `json:"thread_ts,omitempty"`
 	ConversationHistory []ConversationMessage `json:"conversation_history,omitempty"`
 	CorrelationID      string               `json:"correlation_id"`
+	AgentID            string               `json:"agent_id,omitempty"`
 }
 
 type GPTResponse struct {
@@ -35,12 +37,14 @@ type GPTResponse struct {
 type Handler struct {
 	openaiClient *openai.Client
 	logger       *slog.Logger
+	knowledge    *knowledge.Retriever
 }
 
-func NewHandler(openaiClient *openai.Client, logger *slog.Logger) *Handler {
+func NewHandler(openaiClient *openai.Client, logger *slog.Logger, knowledgeRetriever *knowledge.Retriever) *Handler {
 	return &Handler{
 		openaiClient: openaiClient,
 		logger:       logger,
+		knowledge:    knowledgeRetriever,
 	}
 }
 
@@ -83,8 +87,26 @@ func (h *Handler) handleChatCompletion(w http.ResponseWriter, r *http.Request) {
 	// Convert ConversationMessage to openai.Message
 	openaiMessages := convertToOpenAIMessages(req.ConversationHistory)
 
+	// Get agent ID, default to "wavie-bot" if not specified
+	agentID := req.AgentID
+	if agentID == "" {
+		agentID = "wavie-bot"
+	}
+
+	// Add knowledge context if available
+	var knowledgeContext string
+	if h.knowledge != nil {
+		context, err := h.knowledge.GetKnowledgeContext(agentID)
+		if err != nil {
+			h.logger.Warn("Failed to get knowledge context", "error", err, "agent_id", agentID)
+		} else if context != "" {
+			knowledgeContext = context
+			h.logger.Info("Added knowledge context to request", "agent_id", agentID, "context_length", len(knowledgeContext))
+		}
+	}
+
 	// Use conversation history if available
-	response, err := h.openaiClient.ChatCompletionWithHistory(ctx, req.Message, openaiMessages, req.CorrelationID)
+	response, err := h.openaiClient.ChatCompletionWithHistory(ctx, req.Message, openaiMessages, req.CorrelationID, knowledgeContext)
 	if err != nil {
 		h.logger.Error("Failed to get chat completion", "error", err, "correlation_id", req.CorrelationID)
 
