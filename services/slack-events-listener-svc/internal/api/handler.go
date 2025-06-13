@@ -81,6 +81,9 @@ func (h *Handler) verifySlackSignature(r *http.Request) error {
 	if err != nil {
 		return fmt.Errorf("failed to read request body: %w", err)
 	}
+	
+	// Restore the request body so it can be read again
+	r.Body = io.NopCloser(bytes.NewBuffer(body))
 
 	baseString := fmt.Sprintf("v0:%s:%s", timestamp, string(body))
 	mac := hmac.New(sha256.New, []byte(h.signingSecret))
@@ -107,14 +110,7 @@ func (h *Handler) markEventProcessed(eventID string) {
 }
 
 func (h *Handler) ProcessEvent(w http.ResponseWriter, r *http.Request) {
-	// Verify Slack signature
-	if err := h.verifySlackSignature(r); err != nil {
-		h.logger.Error("Failed to verify Slack signature", "error", err)
-		http.Error(w, "Invalid signature", http.StatusUnauthorized)
-		return
-	}
-
-	// Read request body
+	// Read request body first so we can use it for both signature verification and event processing
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		h.logger.Error("Failed to read request body", "error", err)
@@ -122,18 +118,45 @@ func (h *Handler) ProcessEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse event
-	var eventReq slack.EventRequest
-	if err := json.Unmarshal(body, &eventReq); err != nil {
-		h.logger.Error("Failed to parse event request", "error", err)
-		http.Error(w, "Failed to parse event request", http.StatusBadRequest)
+	// Log the raw request body for debugging
+	h.logger.Debug("Received Slack event", "body", string(body))
+
+	// Check if body is empty
+	if len(body) == 0 {
+		h.logger.Error("Empty request body")
+		http.Error(w, "Empty request body", http.StatusBadRequest)
 		return
 	}
 
+	// Create a new reader with the body content and replace the request body
+	r.Body = io.NopCloser(bytes.NewBuffer(body))
+
+	// Verify Slack signature
+	if err := h.verifySlackSignature(r); err != nil {
+		h.logger.Error("Failed to verify Slack signature", "error", err)
+		http.Error(w, "Invalid signature", http.StatusUnauthorized)
+		return
+	}
+
+	// Reset the request body again for parsing
+	r.Body = io.NopCloser(bytes.NewBuffer(body))
+
+	// Parse event
+	var eventReq slack.EventRequest
+	if err := json.Unmarshal(body, &eventReq); err != nil {
+		h.logger.Error("Failed to parse event request", "error", err, "body", string(body))
+		http.Error(w, "Failed to parse event request", http.StatusBadRequest)
+		return
+	}
+	
+	// Log the parsed event for debugging
+	h.logger.Debug("Parsed Slack event", "type", eventReq.Type, "event_id", eventReq.EventID)
+
 	// Handle URL verification challenge
 	if eventReq.Type == "url_verification" {
-		w.Header().Set("Content-Type", "text/plain")
-		w.Write([]byte(eventReq.Challenge))
+		h.logger.Info("Received URL verification challenge", "challenge", eventReq.Challenge)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"challenge": eventReq.Challenge})
 		return
 	}
 
