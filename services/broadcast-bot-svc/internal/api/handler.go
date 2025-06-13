@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/BitwaveCorp/shared-svcs/services/broadcast-bot-svc/internal/slack"
+	"github.com/BitwaveCorp/slack-wavie-bot-system-upgraded/services/broadcast-bot-svc/internal/slack"
 )
 
 type Handler struct {

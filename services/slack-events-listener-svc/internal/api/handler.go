@@ -19,7 +19,7 @@ import (
 	"github.com/BitwaveCorp/slack-wavie-bot-system-upgraded/services/slack-events-listener-svc/internal/conversation"
 	"github.com/BitwaveCorp/slack-wavie-bot-system-upgraded/services/slack-events-listener-svc/internal/slack"
 	"github.com/google/uuid"
-	"github.com/BitwaveCorp/shared-svcs/shared/utils/idgen"
+	"github.com/BitwaveCorp/slack-wavie-bot-system-upgraded/services/slack-events-listener-svc/internal/idgen"
 )
 
 type Handler struct {

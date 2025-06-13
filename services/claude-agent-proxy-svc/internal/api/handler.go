@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/BitwaveCorp/shared-svcs/services/gpt-agent-proxy-svc/internal/openai"
+	"github.com/BitwaveCorp/slack-wavie-bot-system-upgraded/services/claude-agent-proxy-svc/internal/openai"
 )
 
 type ConversationMessage struct {
