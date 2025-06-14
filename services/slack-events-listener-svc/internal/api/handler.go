@@ -310,25 +310,51 @@ func (h *Handler) handleTextFeedback(eventReq slack.EventRequest) {
 	// Create a correlation ID for this feedback
 	correlationID := "fb_" + uuid.New().String()
 
-	// Create feedback request
-	feedbackReq := slack.FeedbackRequest{
-		UserID:        eventReq.Event.User,
-		ChannelID:     eventReq.Event.Channel,
-		MessageTS:     eventReq.Event.TS,
-		ThreadTS:      eventReq.Event.ThreadTS,
-		FeedbackType:  "text",
-		FeedbackText:  feedbackText,
-		Timestamp:     time.Now(),
-		CorrelationID: correlationID,
+	// Get the thread ID (parent message)
+	threadID := eventReq.Event.ThreadTS
+	channel := eventReq.Event.Channel
+
+	// Log processing of feedback message
+	h.logger.Info("Processing wavie message",
+		"channel", channel,
+		"user", eventReq.Event.User,
+		"is_thread", true,
+		"thread_id", threadID,
+		"correlation_id", correlationID)
+
+	// Get conversation history for context
+	conversationHistory := h.conversationStore.GetMessages(threadID)
+
+	// Create a special message format for text feedback
+	message := fmt.Sprintf("FEEDBACK_TEXT:%s", feedbackText)
+
+	// Convert conversation.Message to slack.ConversationMessage
+	slackConversationHistory := convertToSlackMessages(conversationHistory)
+	
+	// Create a Claude request with the feedback message
+	claudeReq := slack.ClaudeRequest{
+		Message:            message,
+		UserID:             eventReq.Event.User,
+		ChannelID:          channel,
+		MessageTS:          eventReq.Event.TS,
+		ThreadTS:           threadID,
+		ConversationHistory: slackConversationHistory,
+		CorrelationID:      correlationID,
+		AgentID:            h.agentID,
 	}
 
-	// Send feedback to broadcast service
-	h.sendFeedbackToBroadcast(feedbackReq)
+	// Call Claude service with the feedback message
+	claudeResp, err := h.callClaudeService(claudeReq)
+	if err != nil {
+		h.logger.Error("Failed to send text feedback to Claude service", "error", err)
+		return
+	}
 
 	h.logger.Info("Processed text feedback",
 		"user", eventReq.Event.User,
 		"channel", eventReq.Event.Channel,
-		"correlation_id", correlationID)
+		"correlation_id", correlationID,
+		"claude_response", claudeResp)
 }
 
 // sendFeedbackToBroadcast sends feedback to the broadcast service

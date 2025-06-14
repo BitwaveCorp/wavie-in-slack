@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/BitwaveCorp/slack-wavie-bot-system-upgraded/services/claude-agent-proxy-svc/internal/knowledge"
@@ -159,9 +160,9 @@ func convertToOpenAIMessages(messages []ConversationMessage) []openai.Message {
 // handleFeedbackMessage checks if a message is a feedback message and handles it appropriately
 // Returns true if the message was handled as feedback, false otherwise
 func (h *Handler) handleFeedbackMessage(w http.ResponseWriter, req GPTRequest) bool {
-	// Check if this is a feedback message
+	// Check if this is a reaction feedback message
 	if req.Message == "FEEDBACK_REACTION:closed_book" {
-		h.logger.Info("Processing feedback message", 
+		h.logger.Info("Processing reaction feedback message", 
 			"correlation_id", req.CorrelationID,
 			"user_id", req.UserID,
 			"channel_id", req.ChannelID,
@@ -180,13 +181,40 @@ func (h *Handler) handleFeedbackMessage(w http.ResponseWriter, req GPTRequest) b
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(gptResp)
 
-		h.logger.Info("Successfully processed feedback message", "correlation_id", req.CorrelationID)
+		h.logger.Info("Successfully processed reaction feedback message", "correlation_id", req.CorrelationID)
 		return true
 	}
 
-	// Also check for text feedback messages that start with ***
+	// Check for text feedback messages with FEEDBACK_TEXT: prefix
+	if strings.HasPrefix(req.Message, "FEEDBACK_TEXT:") {
+		feedbackText := strings.TrimPrefix(req.Message, "FEEDBACK_TEXT:")
+		h.logger.Info("Processing text feedback message", 
+			"correlation_id", req.CorrelationID,
+			"user_id", req.UserID,
+			"channel_id", req.ChannelID,
+			"thread_ts", req.ThreadTS,
+			"feedback_text", feedbackText)
+
+		// Create a standard acknowledgment response for text feedback
+		response := "FEEDBACK Noted :closed_book: Thank you for your detailed feedback. We'll work to address your concerns."
+
+		// Return the response
+		gptResp := GPTResponse{
+			Response:      response,
+			CorrelationID: req.CorrelationID,
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(gptResp)
+
+		h.logger.Info("Successfully processed text feedback message", "correlation_id", req.CorrelationID)
+		return true
+	}
+
+	// Also check for legacy text feedback messages that start with ***
 	if len(req.Message) > 3 && req.Message[:3] == "***" {
-		h.logger.Info("Processing detailed feedback message", 
+		h.logger.Info("Processing legacy detailed feedback message", 
 			"correlation_id", req.CorrelationID,
 			"user_id", req.UserID,
 			"channel_id", req.ChannelID,
@@ -205,7 +233,7 @@ func (h *Handler) handleFeedbackMessage(w http.ResponseWriter, req GPTRequest) b
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(gptResp)
 
-		h.logger.Info("Successfully processed detailed feedback message", "correlation_id", req.CorrelationID)
+		h.logger.Info("Successfully processed legacy detailed feedback message", "correlation_id", req.CorrelationID)
 		return true
 	}
 
