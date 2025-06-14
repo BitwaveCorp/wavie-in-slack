@@ -208,19 +208,10 @@ func (h *Handler) ProcessEvent(w http.ResponseWriter, r *http.Request) {
 				"user", eventReq.Event.User,
 				"channel", eventReq.Event.Channel,
 				"has_thread_ts", eventReq.Event.ThreadTS != "",
-				"text_prefix", prefix,
-				"starts_with_stars", strings.HasPrefix(eventReq.Event.Text, "***"))
-
-			// Only process messages in threads that might contain feedback
-			if eventReq.Event.ThreadTS != "" && strings.HasPrefix(eventReq.Event.Text, "***") {
-				h.logger.Info("Processing text feedback from thread message")
-				h.handleTextFeedback(eventReq)
-			} else if strings.HasPrefix(eventReq.Event.Text, "***") {
-				// Log when we see *** but it's not in a thread
-				h.logger.Info("Ignoring text feedback - not in a thread",
-					"user", eventReq.Event.User,
-					"channel", eventReq.Event.Channel)
-			}
+				"text_prefix", prefix)
+			
+			// Note: We no longer process *** text feedback in messages
+			// Feedback is now handled via reactions or @wavie mentions with closed_book
 		}
 		h.markEventProcessed(eventReq.EventID)
 	}()
@@ -417,7 +408,62 @@ func (h *Handler) handleAppMention(eventReq slack.EventRequest) {
 		threadID = eventReq.Event.TS // Use message timestamp as thread ID for new messages
 	}
 
-	h.logger.Info("Processing wavie message",
+	// Get the original message text before cleaning
+	originalMessage := eventReq.Event.Text
+
+	// Check if this is a feedback message containing "closed_book"
+	if strings.Contains(strings.ToLower(originalMessage), "closed_book") {
+		h.logger.Info("Processing feedback from @mention with closed_book",
+			"correlation_id", correlationID,
+			"user", eventReq.Event.User,
+			"channel", eventReq.Event.Channel,
+			"is_thread", isThreadReply,
+			"thread_id", threadID)
+		
+		// Extract feedback text (everything after removing mentions)
+		feedbackText := strings.ReplaceAll(originalMessage, "<@", "")
+		feedbackText = strings.ReplaceAll(feedbackText, ">", "")
+		feedbackText = strings.ReplaceAll(feedbackText, "@wavie", "")
+		feedbackText = strings.TrimSpace(feedbackText)
+		
+		// Create a feedback request similar to handleReactionAdded
+		// Get conversation history for context
+		conversationHistory := h.conversationStore.GetMessages(threadID)
+		
+		// Create a special message format for text feedback
+		message := fmt.Sprintf("FEEDBACK_TEXT:%s", feedbackText)
+		
+		// Convert conversation.Message to slack.ConversationMessage
+		slackConversationHistory := convertToSlackMessages(conversationHistory)
+		
+		// Create a Claude request with the feedback message
+		claudeReq := slack.ClaudeRequest{
+			Message:             message,
+			UserID:              eventReq.Event.User,
+			ChannelID:           eventReq.Event.Channel,
+			MessageTS:           eventReq.Event.TS,
+			ThreadTS:            threadID,
+			ConversationHistory: slackConversationHistory,
+			CorrelationID:       correlationID,
+			AgentID:             h.agentID,
+		}
+		
+		// Call Claude service with the feedback message
+		claudeResp, err := h.callClaudeService(claudeReq)
+		if err != nil {
+			h.logger.Error("Failed to send text feedback to Claude service", "error", err)
+			return
+		}
+		
+		h.logger.Info("Processed text feedback from @mention",
+			"user", eventReq.Event.User,
+			"channel", eventReq.Event.Channel,
+			"correlation_id", correlationID,
+			"claude_response", claudeResp)
+		return
+	}
+
+	h.logger.Info("Processing regular wavie message",
 		"correlation_id", correlationID,
 		"user", eventReq.Event.User,
 		"channel", eventReq.Event.Channel,
