@@ -207,20 +207,63 @@ func (h *Handler) handleReactionAdded(eventReq slack.EventRequest) {
 	// Set feedback type to negative since we only handle closed_book reactions
 	feedbackType := "negative"
 
-	// Create feedback request
-	feedbackReq := slack.FeedbackRequest{
+	h.logger.Info("Processing reaction feedback",
+		"feedback_type", feedbackType,
+		"user", eventReq.Event.User,
+		"channel", channel,
+		"correlation_id", correlationID)
+	
+	// Send feedback through Claude proxy as a special message
+	// This will follow the normal message flow but with a special format
+	message := "FEEDBACK_REACTION:closed_book"
+	
+	// Get conversation history for this thread
+	threadID := messageTS // Use the message timestamp as thread ID
+	conversationHistory := h.conversationStore.GetMessages(threadID)
+	
+	// Convert conversation.Message to slack.ConversationMessage
+	slackConversationHistory := convertToSlackMessages(conversationHistory)
+	
+	// Create a Claude request with the feedback message
+	claudeReq := slack.ClaudeRequest{
+		Message:            message,
+		UserID:             eventReq.Event.User,
+		ChannelID:          channel,
+		MessageTS:          eventReq.Event.Reaction.Item.TS,
+		ThreadTS:           threadID,
+		ConversationHistory: slackConversationHistory,
+		CorrelationID:      correlationID,
+		AgentID:            h.agentID,
+	}
+	
+	// Call Claude service with the feedback message
+	claudeResp, err := h.callClaudeService(claudeReq)
+	if err != nil {
+		h.logger.Error("Failed to call Claude service for feedback", "error", err, "correlation_id", correlationID)
+		return
+	}
+	
+	// Post the Claude response back to the thread
+	err = h.slackClient.PostMessage(context.Background(), channel, claudeResp.Response, threadID)
+	if err != nil {
+		h.logger.Error("Failed to post feedback response to Slack", "error", err, "correlation_id", correlationID)
+		return
+	}
+	
+	// Send to broadcast service as well for consistency
+	broadcastReq := slack.BroadcastRequest{
 		UserID:        eventReq.Event.User,
 		ChannelID:     channel,
-		MessageTS:     messageTS,
-		FeedbackType:  feedbackType,
+		ThreadID:      threadID,
+		Question:      message,
+		Response:      claudeResp.Response,
 		Timestamp:     time.Now(),
 		CorrelationID: correlationID,
 	}
-
-	// Send feedback to broadcast service
-	h.sendFeedbackToBroadcast(feedbackReq)
-
-	h.logger.Info("Processed reaction feedback",
+	
+	go h.callBroadcastService(broadcastReq)
+	
+	h.logger.Info("Processed feedback through Claude proxy",
 		"feedback_type", feedbackType,
 		"user", eventReq.Event.User,
 		"channel", channel,

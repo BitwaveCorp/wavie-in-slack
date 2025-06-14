@@ -79,7 +79,13 @@ func (h *Handler) handleChatCompletion(w http.ResponseWriter, r *http.Request) {
 		"user_id", req.UserID,
 		"channel_id", req.ChannelID,
 		"thread_ts", req.ThreadTS,
+		"message", req.Message,
 		"has_history", len(req.ConversationHistory) > 0)
+
+	// Check if this is a feedback message
+	if isFeedbackMessage := h.handleFeedbackMessage(w, req); isFeedbackMessage {
+		return
+	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
 	defer cancel()
@@ -148,4 +154,60 @@ func convertToOpenAIMessages(messages []ConversationMessage) []openai.Message {
 		}
 	}
 	return openaiMessages
+}
+
+// handleFeedbackMessage checks if a message is a feedback message and handles it appropriately
+// Returns true if the message was handled as feedback, false otherwise
+func (h *Handler) handleFeedbackMessage(w http.ResponseWriter, req GPTRequest) bool {
+	// Check if this is a feedback message
+	if req.Message == "FEEDBACK_REACTION:closed_book" {
+		h.logger.Info("Processing feedback message", 
+			"correlation_id", req.CorrelationID,
+			"user_id", req.UserID,
+			"channel_id", req.ChannelID,
+			"thread_ts", req.ThreadTS)
+
+		// Create a standard acknowledgment response for feedback
+		response := "FEEDBACK Noted :closed_book: Thank you for your feedback. We'll work to improve our responses."
+
+		// Return the response
+		gptResp := GPTResponse{
+			Response:      response,
+			CorrelationID: req.CorrelationID,
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(gptResp)
+
+		h.logger.Info("Successfully processed feedback message", "correlation_id", req.CorrelationID)
+		return true
+	}
+
+	// Also check for text feedback messages that start with ***
+	if len(req.Message) > 3 && req.Message[:3] == "***" {
+		h.logger.Info("Processing detailed feedback message", 
+			"correlation_id", req.CorrelationID,
+			"user_id", req.UserID,
+			"channel_id", req.ChannelID,
+			"thread_ts", req.ThreadTS)
+
+		// Create a standard acknowledgment response for detailed feedback
+		response := "FEEDBACK Noted :closed_book: Thank you for your detailed feedback. We'll work to address your concerns."
+
+		// Return the response
+		gptResp := GPTResponse{
+			Response:      response,
+			CorrelationID: req.CorrelationID,
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(gptResp)
+
+		h.logger.Info("Successfully processed detailed feedback message", "correlation_id", req.CorrelationID)
+		return true
+	}
+
+	return false
 }
