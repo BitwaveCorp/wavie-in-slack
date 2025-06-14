@@ -1,9 +1,7 @@
 package api
 
 import (
-	"bytes"
 	"encoding/json"
-	"io"
 	"log/slog"
 	"net/http"
 	"sync"
@@ -54,22 +52,6 @@ func (h *Handler) markMessageProcessed(correlationID string) {
 }
 
 func (h *Handler) handleFeedback(w http.ResponseWriter, r *http.Request) {
-	h.logger.Info("Received feedback request")
-	
-	// Read and log the raw request body for debugging
-	bodyBytes, err := io.ReadAll(r.Body)
-	if err != nil {
-		h.logger.Error("Failed to read request body", "error", err)
-		http.Error(w, "Failed to read request body", http.StatusBadRequest)
-		return
-	}
-	
-	// Log the raw request body
-	h.logger.Info("Raw feedback request body", "body", string(bodyBytes))
-	
-	// Restore the request body for further processing
-	r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
-	
 	var req slack.FeedbackRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		h.logger.Error("Failed to decode feedback request", "error", err)
@@ -96,7 +78,7 @@ func (h *Handler) handleFeedback(w http.ResponseWriter, r *http.Request) {
 		"user_id", req.UserID,
 		"feedback_type", req.FeedbackType)
 
-	err = h.slackClient.PostFeedbackMessage(r.Context(), h.broadcastChannelID, req)
+	err := h.slackClient.PostFeedbackMessage(r.Context(), h.broadcastChannelID, req)
 	if err != nil {
 		h.logger.Error("Failed to post feedback message", "error", err, "correlation_id", req.CorrelationID)
 		http.Error(w, "Failed to post feedback message", http.StatusInternalServerError)
