@@ -264,15 +264,6 @@ func (h *Handler) handleTextFeedback(eventReq slack.EventRequest) {
 
 // sendFeedbackToBroadcast sends feedback to the broadcast service
 func (h *Handler) sendFeedbackToBroadcast(feedback slack.FeedbackRequest) {
-	// Log detailed information about the feedback being sent
-	h.logger.Info("Preparing to send feedback to broadcast service",
-		"feedback_type", feedback.FeedbackType,
-		"user_id", feedback.UserID,
-		"channel_id", feedback.ChannelID,
-		"message_ts", feedback.MessageTS,
-		"correlation_id", feedback.CorrelationID,
-		"broadcast_url", h.broadcastServiceURL)
-
 	// Marshal feedback to JSON
 	feedbackJSON, err := json.Marshal(feedback)
 	if err != nil {
@@ -280,31 +271,20 @@ func (h *Handler) sendFeedbackToBroadcast(feedback slack.FeedbackRequest) {
 		return
 	}
 
-	// Log the JSON payload being sent
-	h.logger.Info("Sending feedback JSON payload", "payload", string(feedbackJSON))
-
 	// Send to broadcast service
 	resp, err := http.Post(h.broadcastServiceURL+"/api/feedback", "application/json", bytes.NewReader(feedbackJSON))
 	if err != nil {
-		h.logger.Error("Failed to send feedback to broadcast service", "error", err, "url", h.broadcastServiceURL+"/api/feedback")
+		h.logger.Error("Failed to send feedback to broadcast service", "error", err)
 		return
 	}
 	defer resp.Body.Close()
 
-	// Read response body for debugging
-	respBody, _ := io.ReadAll(resp.Body)
-
 	if resp.StatusCode != http.StatusOK {
-		h.logger.Error("Broadcast service returned non-OK status", 
-			"status", resp.Status,
-			"response_body", string(respBody))
+		h.logger.Error("Broadcast service returned non-OK status", "status", resp.Status)
 		return
 	}
 
-	h.logger.Info("Successfully sent feedback to broadcast service", 
-		"correlation_id", feedback.CorrelationID,
-		"status_code", resp.StatusCode,
-		"response_body", string(respBody))
+	h.logger.Info("Successfully sent feedback to broadcast service", "correlation_id", feedback.CorrelationID)
 }
 
 func (h *Handler) handleAppMention(eventReq slack.EventRequest) {
