@@ -104,9 +104,27 @@ func (c *Client) PostFeedbackMessage(ctx context.Context, channelID string, req 
 	}
 	defer resp.Body.Close()
 
+	// Read the response body
+	body, _ := io.ReadAll(resp.Body)
+	
+	// Check HTTP status code first
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("slack API error: %d - %s", resp.StatusCode, string(body))
+	}
+	
+	// Parse the response to check for Slack API errors
+	var slackResponse struct {
+		Ok    bool   `json:"ok"`
+		Error string `json:"error,omitempty"`
+	}
+	
+	if err := json.Unmarshal(body, &slackResponse); err != nil {
+		return fmt.Errorf("failed to parse Slack API response: %w", err)
+	}
+	
+	// Check if Slack API returned an error
+	if !slackResponse.Ok {
+		return fmt.Errorf("slack API error: %s", slackResponse.Error)
 	}
 
 	c.logger.Info("Feedback message posted to Slack",
@@ -175,9 +193,27 @@ func (c *Client) PostBroadcastMessage(ctx context.Context, channelID string, req
 	}
 	defer resp.Body.Close()
 
+	// Read the response body
+	body, _ := io.ReadAll(resp.Body)
+	
+	// Check HTTP status code first
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("slack API error: %d - %s", resp.StatusCode, string(body))
+	}
+	
+	// Parse the response to check for Slack API errors
+	var slackResponse struct {
+		Ok    bool   `json:"ok"`
+		Error string `json:"error,omitempty"`
+	}
+	
+	if err := json.Unmarshal(body, &slackResponse); err != nil {
+		return fmt.Errorf("failed to parse Slack API response: %w", err)
+	}
+	
+	// Check if Slack API returned an error
+	if !slackResponse.Ok {
+		return fmt.Errorf("slack API error: %s", slackResponse.Error)
 	}
 
 	c.logger.Info("Broadcast message posted to Slack",
