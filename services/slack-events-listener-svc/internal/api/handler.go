@@ -211,7 +211,7 @@ func (h *Handler) ProcessEvent(w http.ResponseWriter, r *http.Request) {
 // handleReactionAdded processes reaction events for feedback
 func (h *Handler) handleReactionAdded(eventReq slack.EventRequest) {
 	// Only process closed_book reactions for negative feedback
-	if eventReq.Event.Reaction.Reaction != "closed_book" {
+	if eventReq.Event.Reaction != "closed_book" {
 		return
 	}
 
@@ -255,7 +255,7 @@ func (h *Handler) handleReactionAdded(eventReq slack.EventRequest) {
 		Message:            message,
 		UserID:             eventReq.Event.User,
 		ChannelID:          channel,
-		MessageTS:          eventReq.Event.Reaction.Item.TS,
+		MessageTS:          messageTS, // Using the messageTS we already extracted
 		ThreadTS:           threadID,
 		ConversationHistory: slackConversationHistory,
 		CorrelationID:      correlationID,

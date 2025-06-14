@@ -25,7 +25,10 @@ type Event struct {
 	EventTS  string `json:"event_ts"`
 	BotID    string `json:"bot_id,omitempty"`
 	Item     Item    `json:"item,omitempty"`
-	Reaction Reaction `json:"reaction,omitempty"`
+	// For reaction events, the reaction field is a string, not a struct
+	Reaction string `json:"reaction,omitempty"`
+	// Additional fields for reaction events
+	ItemUser string `json:"item_user,omitempty"`
 }
 
 type Item struct {
@@ -39,6 +42,16 @@ type Reaction struct {
 	User    string `json:"user"`
 	Reaction string `json:"reaction"`
 	Item    Item    `json:"item"`
+}
+
+// ReactionEvent represents the structure Slack sends for reaction_added events
+type ReactionEvent struct {
+	Type      string `json:"type"`
+	User      string `json:"user"`
+	Reaction  string `json:"reaction"`
+	ItemUser  string `json:"item_user"`
+	Item      Item   `json:"item"`
+	EventTS   string `json:"event_ts"`
 }
 
 type Auth struct {
