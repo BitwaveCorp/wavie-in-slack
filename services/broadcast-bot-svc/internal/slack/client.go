@@ -162,9 +162,11 @@ func (c *Client) PostBroadcastMessage(ctx context.Context, channelID string, req
 		},
 		{
 			Type: "context",
-			Text: &TextObject{
-				Type: "mrkdwn",
-				Text: fmt.Sprintf("Correlation ID: `%s`", req.CorrelationID),
+			Elements: []interface{}{
+				map[string]interface{}{
+					"type": "mrkdwn",
+					"text": fmt.Sprintf("Correlation ID: `%s`", req.CorrelationID),
+				},
 			},
 		},
 	}

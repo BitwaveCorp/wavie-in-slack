@@ -26,8 +26,9 @@ type FeedbackRequest struct {
 }
 
 type MessageBlock struct {
-	Type string      `json:"type"`
-	Text *TextObject `json:"text,omitempty"`
+	Type     string        `json:"type"`
+	Text     *TextObject   `json:"text,omitempty"`
+	Elements []interface{} `json:"elements,omitempty"`
 }
 
 type TextObject struct {
