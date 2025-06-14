@@ -192,8 +192,8 @@ func (h *Handler) ProcessEvent(w http.ResponseWriter, r *http.Request) {
 
 // handleReactionAdded processes reaction events for feedback
 func (h *Handler) handleReactionAdded(eventReq slack.EventRequest) {
-	// Only process thumbs up/down reactions
-	if eventReq.Event.Reaction.Reaction != "+1" && eventReq.Event.Reaction.Reaction != "-1" {
+	// Only process closed_book reactions for negative feedback
+	if eventReq.Event.Reaction.Reaction != "closed_book" {
 		return
 	}
 
@@ -204,11 +204,8 @@ func (h *Handler) handleReactionAdded(eventReq slack.EventRequest) {
 	// Create a correlation ID for this feedback
 	correlationID := "fb_" + uuid.New().String()
 
-	// Determine feedback type
-	feedbackType := "positive"
-	if eventReq.Event.Reaction.Reaction == "-1" {
-		feedbackType = "negative"
-	}
+	// Set feedback type to negative since we only handle closed_book reactions
+	feedbackType := "negative"
 
 	// Create feedback request
 	feedbackReq := slack.FeedbackRequest{
@@ -358,7 +355,7 @@ func (h *Handler) handleAppMention(eventReq slack.EventRequest) {
 
 	// For new conversations (not in a thread), append a hint to continue conversation in thread for new messages
 	if eventReq.Event.ThreadTS == "" {
-		claudeResp.Response += "\n\n_Reply in this thread to continue our conversation. React with 👍 or 👎 to provide feedback, or start your message with *** to leave detailed feedback._"
+		claudeResp.Response += "\n\n_Reply in this thread to continue our conversation. React with :closed_book: if the response needs improvement, or start your message with *** to leave detailed feedback._"
 	}
 
 	// Always reply in the thread if there is one

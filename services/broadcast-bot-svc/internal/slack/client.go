@@ -58,7 +58,7 @@ func (c *Client) PostFeedbackMessage(ctx context.Context, channelID string, req 
 			Type: "section",
 			Text: &TextObject{
 				Type: "mrkdwn",
-				Text: ":thumbsdown: *Negative Feedback*",
+				Text: ":closed_book: *Response Needs Improvement*",
 			},
 		})
 	case "text":
@@ -74,9 +74,11 @@ func (c *Client) PostFeedbackMessage(ctx context.Context, channelID string, req 
 	// Add context information
 	blocks = append(blocks, MessageBlock{
 		Type: "context",
-		Text: &TextObject{
-			Type: "mrkdwn",
-			Text: fmt.Sprintf("Correlation ID: `%s`", req.CorrelationID),
+		Elements: []interface{}{
+			map[string]interface{}{
+				"type": "mrkdwn",
+				"text": fmt.Sprintf("Correlation ID: `%s`", req.CorrelationID),
+			},
 		},
 	})
 
