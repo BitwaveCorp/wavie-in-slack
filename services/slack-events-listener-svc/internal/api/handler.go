@@ -18,21 +18,21 @@ import (
 	"time"
 
 	"github.com/BitwaveCorp/slack-wavie-bot-system-upgraded/services/slack-events-listener-svc/internal/conversation"
+	"github.com/BitwaveCorp/slack-wavie-bot-system-upgraded/services/slack-events-listener-svc/internal/idgen"
 	"github.com/BitwaveCorp/slack-wavie-bot-system-upgraded/services/slack-events-listener-svc/internal/slack"
 	"github.com/google/uuid"
-	"github.com/BitwaveCorp/slack-wavie-bot-system-upgraded/services/slack-events-listener-svc/internal/idgen"
 )
 
 type Handler struct {
-	slackClient         *slack.Client
-	signingSecret       string
-	claudeProxyServiceURL  string
-	broadcastServiceURL string
-	logger              *slog.Logger
-	processedEvents     map[string]bool
-	eventsMutex         sync.RWMutex
-	conversationStore   *conversation.Store
-	agentID             string // The agent ID for this bot instance
+	slackClient           *slack.Client
+	signingSecret         string
+	claudeProxyServiceURL string
+	broadcastServiceURL   string
+	logger                *slog.Logger
+	processedEvents       map[string]bool
+	eventsMutex           sync.RWMutex
+	conversationStore     *conversation.Store
+	agentID               string // The agent ID for this bot instance
 }
 
 func NewHandler(slackClient *slack.Client, signingSecret, claudeProxyServiceURL, broadcastServiceURL, agentID string, logger *slog.Logger) *Handler {
@@ -40,14 +40,14 @@ func NewHandler(slackClient *slack.Client, signingSecret, claudeProxyServiceURL,
 	conversationStore := conversation.NewStoreWithMessageLimit(10, 15*time.Minute, 500)
 
 	return &Handler{
-		slackClient:         slackClient,
-		signingSecret:       signingSecret,
-		claudeProxyServiceURL:  claudeProxyServiceURL,
-		broadcastServiceURL: broadcastServiceURL,
-		logger:              logger,
-		processedEvents:     make(map[string]bool),
-		conversationStore:   conversationStore,
-		agentID:             agentID,
+		slackClient:           slackClient,
+		signingSecret:         signingSecret,
+		claudeProxyServiceURL: claudeProxyServiceURL,
+		broadcastServiceURL:   broadcastServiceURL,
+		logger:                logger,
+		processedEvents:       make(map[string]bool),
+		conversationStore:     conversationStore,
+		agentID:               agentID,
 	}
 }
 
@@ -92,7 +92,7 @@ func (h *Handler) verifySlackSignature(r *http.Request) error {
 	if err != nil {
 		return fmt.Errorf("failed to read request body: %w", err)
 	}
-	
+
 	// Restore the request body so it can be read again
 	r.Body = io.NopCloser(bytes.NewBuffer(body))
 
@@ -122,9 +122,9 @@ func (h *Handler) markEventProcessed(eventID string) {
 
 func (h *Handler) ProcessEvent(w http.ResponseWriter, r *http.Request) {
 	// Log request headers for debugging
-	h.logger.Info("Received Slack event request", 
-		"method", r.Method, 
-		"path", r.URL.Path, 
+	h.logger.Info("Received Slack event request",
+		"method", r.Method,
+		"path", r.URL.Path,
 		"content_type", r.Header.Get("Content-Type"),
 		"content_length", r.Header.Get("Content-Length"))
 
@@ -169,7 +169,7 @@ func (h *Handler) ProcessEvent(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to parse event request", http.StatusBadRequest)
 		return
 	}
-	
+
 	// Log the parsed event for debugging
 	h.logger.Debug("Parsed Slack event", "type", eventReq.Type, "event_id", eventReq.EventID)
 
@@ -196,9 +196,30 @@ func (h *Handler) ProcessEvent(w http.ResponseWriter, r *http.Request) {
 		case "reaction_added":
 			h.handleReactionAdded(eventReq)
 		case "message":
+			// Log all message events for debugging
+			prefix := ""
+			if len(eventReq.Event.Text) > 10 {
+				prefix = eventReq.Event.Text[:10] + "..."
+			} else {
+				prefix = eventReq.Event.Text
+			}
+			
+			h.logger.Info("Received message event",
+				"user", eventReq.Event.User,
+				"channel", eventReq.Event.Channel,
+				"has_thread_ts", eventReq.Event.ThreadTS != "",
+				"text_prefix", prefix,
+				"starts_with_stars", strings.HasPrefix(eventReq.Event.Text, "***"))
+
 			// Only process messages in threads that might contain feedback
 			if eventReq.Event.ThreadTS != "" && strings.HasPrefix(eventReq.Event.Text, "***") {
+				h.logger.Info("Processing text feedback from thread message")
 				h.handleTextFeedback(eventReq)
+			} else if strings.HasPrefix(eventReq.Event.Text, "***") {
+				// Log when we see *** but it's not in a thread
+				h.logger.Info("Ignoring text feedback - not in a thread",
+					"user", eventReq.Event.User,
+					"channel", eventReq.Event.Channel)
 			}
 		}
 		h.markEventProcessed(eventReq.EventID)
@@ -230,7 +251,7 @@ func (h *Handler) handleReactionAdded(eventReq slack.EventRequest) {
 		"user", eventReq.Event.User,
 		"channel", channel,
 		"correlation_id", correlationID)
-	
+
 	// Add a log message similar to normal message processing for consistency
 	h.logger.Info("Processing wavie message",
 		"channel", channel,
@@ -238,44 +259,44 @@ func (h *Handler) handleReactionAdded(eventReq slack.EventRequest) {
 		"is_thread", true,
 		"thread_id", messageTS,
 		"correlation_id", correlationID)
-	
+
 	// Send feedback through Claude proxy as a special message
 	// This will follow the normal message flow but with a special format
 	message := "FEEDBACK_REACTION:closed_book"
-	
+
 	// Get conversation history for this thread
 	threadID := messageTS // Use the message timestamp as thread ID
 	conversationHistory := h.conversationStore.GetMessages(threadID)
-	
+
 	// Convert conversation.Message to slack.ConversationMessage
 	slackConversationHistory := convertToSlackMessages(conversationHistory)
-	
+
 	// Create a Claude request with the feedback message
 	claudeReq := slack.ClaudeRequest{
-		Message:            message,
-		UserID:             eventReq.Event.User,
-		ChannelID:          channel,
-		MessageTS:          messageTS, // Using the messageTS we already extracted
-		ThreadTS:           threadID,
+		Message:             message,
+		UserID:              eventReq.Event.User,
+		ChannelID:           channel,
+		MessageTS:           messageTS, // Using the messageTS we already extracted
+		ThreadTS:            threadID,
 		ConversationHistory: slackConversationHistory,
-		CorrelationID:      correlationID,
-		AgentID:            h.agentID,
+		CorrelationID:       correlationID,
+		AgentID:             h.agentID,
 	}
-	
+
 	// Call Claude service with the feedback message
 	claudeResp, err := h.callClaudeService(claudeReq)
 	if err != nil {
 		h.logger.Error("Failed to call Claude service for feedback", "error", err, "correlation_id", correlationID)
 		return
 	}
-	
+
 	// Post the Claude response back to the thread
 	err = h.slackClient.PostMessage(context.Background(), channel, claudeResp.Response, threadID)
 	if err != nil {
 		h.logger.Error("Failed to post feedback response to Slack", "error", err, "correlation_id", correlationID)
 		return
 	}
-	
+
 	// Send to broadcast service as well for consistency
 	broadcastReq := slack.BroadcastRequest{
 		UserID:        eventReq.Event.User,
@@ -286,9 +307,9 @@ func (h *Handler) handleReactionAdded(eventReq slack.EventRequest) {
 		Timestamp:     time.Now(),
 		CorrelationID: correlationID,
 	}
-	
+
 	go h.callBroadcastService(broadcastReq)
-	
+
 	h.logger.Info("Processed feedback through Claude proxy",
 		"feedback_type", feedbackType,
 		"user", eventReq.Event.User,
@@ -330,17 +351,17 @@ func (h *Handler) handleTextFeedback(eventReq slack.EventRequest) {
 
 	// Convert conversation.Message to slack.ConversationMessage
 	slackConversationHistory := convertToSlackMessages(conversationHistory)
-	
+
 	// Create a Claude request with the feedback message
 	claudeReq := slack.ClaudeRequest{
-		Message:            message,
-		UserID:             eventReq.Event.User,
-		ChannelID:          channel,
-		MessageTS:          eventReq.Event.TS,
-		ThreadTS:           threadID,
+		Message:             message,
+		UserID:              eventReq.Event.User,
+		ChannelID:           channel,
+		MessageTS:           eventReq.Event.TS,
+		ThreadTS:            threadID,
 		ConversationHistory: slackConversationHistory,
-		CorrelationID:      correlationID,
-		AgentID:            h.agentID,
+		CorrelationID:       correlationID,
+		AgentID:             h.agentID,
 	}
 
 	// Call Claude service with the feedback message
@@ -396,9 +417,9 @@ func (h *Handler) handleAppMention(eventReq slack.EventRequest) {
 		threadID = eventReq.Event.TS // Use message timestamp as thread ID for new messages
 	}
 
-	h.logger.Info("Processing wavie message", 
-		"correlation_id", correlationID, 
-		"user", eventReq.Event.User, 
+	h.logger.Info("Processing wavie message",
+		"correlation_id", correlationID,
+		"user", eventReq.Event.User,
 		"channel", eventReq.Event.Channel,
 		"is_thread", isThreadReply,
 		"thread_id", threadID)
@@ -420,16 +441,16 @@ func (h *Handler) handleAppMention(eventReq slack.EventRequest) {
 
 	// Use the agent ID associated with this bot instance
 	h.logger.Info("Using configured agent for request", "agent_id", h.agentID, "correlation_id", correlationID)
-	
+
 	claudeReq := slack.ClaudeRequest{
-		Message:            message,
-		UserID:             eventReq.Event.User,
-		ChannelID:          eventReq.Event.Channel,
-		MessageTS:          eventReq.Event.TS,
-		ThreadTS:           threadID,
+		Message:             message,
+		UserID:              eventReq.Event.User,
+		ChannelID:           eventReq.Event.Channel,
+		MessageTS:           eventReq.Event.TS,
+		ThreadTS:            threadID,
 		ConversationHistory: slackConversationHistory,
-		CorrelationID:      correlationID,
-		AgentID:            h.agentID,
+		CorrelationID:       correlationID,
+		AgentID:             h.agentID,
 	}
 
 	claudeResp, err := h.callClaudeService(claudeReq)
@@ -493,7 +514,7 @@ func (h *Handler) callClaudeService(req slack.ClaudeRequest) (slack.ClaudeRespon
 
 	// Create a custom transport with increased timeouts
 	transport := &http.Transport{
-		TLSHandshakeTimeout:   30 * time.Second,
+		TLSHandshakeTimeout: 30 * time.Second,
 		DialContext: (&net.Dialer{
 			Timeout:   30 * time.Second,
 			KeepAlive: 30 * time.Second,
