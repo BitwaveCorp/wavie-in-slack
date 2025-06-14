@@ -56,6 +56,14 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /slack/events", h.ProcessEvent)
 }
 
+// Helper function to get the minimum of two integers
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 func (h *Handler) handleHealthCheck(w http.ResponseWriter, r *http.Request) {
 	response := map[string]string{"status": "ok"}
 	w.Header().Set("Content-Type", "application/json")
@@ -113,6 +121,13 @@ func (h *Handler) markEventProcessed(eventID string) {
 }
 
 func (h *Handler) ProcessEvent(w http.ResponseWriter, r *http.Request) {
+	// Log request headers for debugging
+	h.logger.Info("Received Slack event request", 
+		"method", r.Method, 
+		"path", r.URL.Path, 
+		"content_type", r.Header.Get("Content-Type"),
+		"content_length", r.Header.Get("Content-Length"))
+
 	// Read request body first so we can use it for both signature verification and event processing
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -122,7 +137,10 @@ func (h *Handler) ProcessEvent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Log the raw request body for debugging
-	h.logger.Debug("Received Slack event", "body", string(body))
+	h.logger.Info("Received Slack event body", "body_length", len(body))
+	if len(body) < 1000 { // Only log full body if it's not too large
+		h.logger.Debug("Received Slack event body content", "body", string(body))
+	}
 
 	// Check if body is empty
 	if len(body) == 0 {
@@ -147,7 +165,7 @@ func (h *Handler) ProcessEvent(w http.ResponseWriter, r *http.Request) {
 	// Parse event
 	var eventReq slack.EventRequest
 	if err := json.Unmarshal(body, &eventReq); err != nil {
-		h.logger.Error("Failed to parse event request", "error", err, "body", string(body))
+		h.logger.Error("Failed to parse event request", "error", err, "body_preview", string(body[:min(len(body), 200)]))
 		http.Error(w, "Failed to parse event request", http.StatusBadRequest)
 		return
 	}
