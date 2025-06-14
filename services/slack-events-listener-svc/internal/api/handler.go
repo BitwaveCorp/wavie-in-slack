@@ -213,6 +213,14 @@ func (h *Handler) handleReactionAdded(eventReq slack.EventRequest) {
 		"channel", channel,
 		"correlation_id", correlationID)
 	
+	// Add a log message similar to normal message processing for consistency
+	h.logger.Info("Processing wavie message",
+		"channel", channel,
+		"user", eventReq.Event.User,
+		"is_thread", true,
+		"thread_id", messageTS,
+		"correlation_id", correlationID)
+	
 	// Send feedback through Claude proxy as a special message
 	// This will follow the normal message flow but with a special format
 	message := "FEEDBACK_REACTION:closed_book"
