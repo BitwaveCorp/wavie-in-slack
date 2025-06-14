@@ -451,15 +451,35 @@ func (h *Handler) handleAppMention(eventReq slack.EventRequest) {
 		// Call Claude service with the feedback message
 		claudeResp, err := h.callClaudeService(claudeReq)
 		if err != nil {
-			h.logger.Error("Failed to send text feedback to Claude service", "error", err)
+			h.logger.Error("Failed to call Claude service for feedback", "error", err, "correlation_id", correlationID)
 			return
 		}
 		
-		h.logger.Info("Processed text feedback from @mention",
+		// Post the Claude response back to the thread
+		err = h.slackClient.PostMessage(context.Background(), eventReq.Event.Channel, claudeResp.Response, threadID)
+		if err != nil {
+			h.logger.Error("Failed to post feedback response to Slack", "error", err, "correlation_id", correlationID)
+			return
+		}
+		
+		// Send to broadcast service as well for consistency
+		broadcastReq := slack.BroadcastRequest{
+			UserID:        eventReq.Event.User,
+			ChannelID:     eventReq.Event.Channel,
+			ThreadID:      threadID,
+			Question:      message,
+			Response:      claudeResp.Response,
+			Timestamp:     time.Now(),
+			CorrelationID: correlationID,
+		}
+		
+		go h.callBroadcastService(broadcastReq)
+		
+		h.logger.Info("Processed feedback through Claude proxy",
+			"feedback_type", "text_with_closed_book",
 			"user", eventReq.Event.User,
 			"channel", eventReq.Event.Channel,
-			"correlation_id", correlationID,
-			"claude_response", claudeResp)
+			"correlation_id", correlationID)
 		return
 	}
 
