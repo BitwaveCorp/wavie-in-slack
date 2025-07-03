@@ -10,15 +10,15 @@ import (
 
 // Handler handles HTTP requests for knowledge management
 type Handler struct {
-	storageManager *StorageManager
+	storageBackend StorageBackend
 	logger         *slog.Logger
 	maxUploadSize  int64
 }
 
 // NewHandler creates a new knowledge handler
-func NewHandler(storageManager *StorageManager, logger *slog.Logger) *Handler {
+func NewHandler(storageBackend StorageBackend, logger *slog.Logger) *Handler {
 	return &Handler{
-		storageManager: storageManager,
+		storageBackend: storageBackend,
 		logger:         logger,
 		maxUploadSize:  50 * 1024 * 1024, // 50MB max upload size
 	}
@@ -79,7 +79,7 @@ func (h *Handler) handleUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create knowledge file
-	knowledgeFile, err := h.storageManager.StoreKnowledgeFile(name, description, agentIDs, file, "application/zip")
+	knowledgeFile, err := h.storageBackend.StoreKnowledgeFile(name, description, agentIDs, file, "application/zip")
 	if err != nil {
 		h.logger.Error("Failed to add knowledge file", "error", err)
 		http.Error(w, "Failed to add knowledge file: "+err.Error(), http.StatusInternalServerError)
@@ -103,7 +103,7 @@ func (h *Handler) handleListFiles(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get files from storage manager
-	files := h.storageManager.GetAllKnowledgeFiles()
+	files := h.storageBackend.GetAllKnowledgeFiles()
 
 	// Return files
 	w.Header().Set("Content-Type", "application/json")
@@ -145,7 +145,7 @@ func (h *Handler) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Delete file
-	err := h.storageManager.DeleteKnowledgeFile(req.ID)
+	err := h.storageBackend.DeleteKnowledgeFile(req.ID)
 	if err != nil {
 		h.logger.Error("Failed to delete knowledge file", "error", err)
 		w.Header().Set("Content-Type", "application/json")
@@ -168,7 +168,7 @@ func (h *Handler) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) handleListAgents(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet {
 		// Get agents from storage manager
-		agents := h.storageManager.GetAllAgents()
+		agents := h.storageBackend.GetAllAgents()
 
 		// Return agents
 		w.Header().Set("Content-Type", "application/json")
@@ -217,7 +217,7 @@ func (h *Handler) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create agent
-	agent, err := h.storageManager.CreateAgent(req.ID, req.Name, req.Description, req.TenantID)
+	agent, err := h.storageBackend.CreateAgent(req.ID, req.Name, req.Description, req.TenantID)
 	if err != nil {
 		h.logger.Error("Failed to create agent", "error", err)
 		http.Error(w, "Failed to create agent: "+err.Error(), http.StatusInternalServerError)

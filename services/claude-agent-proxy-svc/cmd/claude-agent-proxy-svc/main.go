@@ -50,21 +50,32 @@ func main() {
 
 	// Initialize knowledge management system if enabled
 	var knowledgeRetriever *knowledge.Retriever
-	var storageManager *knowledge.StorageManager
+	var storageBackend knowledge.StorageBackend
 	if cfg.KnowledgeEnabled {
-		// Create knowledge storage manager
+		// Create storage configuration from app config
+		storageConfig := knowledge.StorageConfig{
+			Type:       knowledge.StorageType(cfg.Knowledge.StorageType),
+			LocalPath:  cfg.KnowledgeBasePath,
+			GCPBucket:  cfg.Knowledge.GCPBucket,
+			GCPProject: cfg.Knowledge.GCPProject,
+			GCPKeyFile: cfg.Knowledge.GCPKeyFile,
+		}
+		
+		// Create storage backend using factory
 		var err error
-		storageManager, err = knowledge.NewStorageManager(cfg.KnowledgeBasePath, logger)
+		storageBackend, err = knowledge.NewStorageBackend(context.Background(), storageConfig, logger)
 		if err != nil {
-			slog.Error("Failed to initialize knowledge storage manager", "error", err)
+			slog.Error("Failed to initialize knowledge storage backend", "error", err, "storage_type", storageConfig.Type)
 			os.Exit(1)
 		}
 
 		// Create knowledge retriever
-		knowledgeRetriever = knowledge.NewRetriever(storageManager, logger)
+		knowledgeRetriever = knowledge.NewRetriever(storageBackend, logger)
 
 		// Log successful initialization
-		slog.Info("Knowledge management system initialized", "base_path", cfg.KnowledgeBasePath)
+		slog.Info("Knowledge management system initialized", 
+			"base_path", cfg.KnowledgeBasePath,
+			"storage_type", storageConfig.Type)
 	}
 
 	claudeClient := openai.NewClient(cfg.ClaudeAPIKey, cfg.ClaudeModel, logger)
@@ -74,8 +85,8 @@ func main() {
 	handler.RegisterRoutes(mux)
 	
 	// Register knowledge management routes if enabled
-	if cfg.KnowledgeEnabled && storageManager != nil {
-		knowledgeHandler := knowledge.NewHandler(storageManager, logger)
+	if cfg.KnowledgeEnabled && storageBackend != nil {
+		knowledgeHandler := knowledge.NewHandler(storageBackend, logger)
 		knowledgeHandler.RegisterRoutes(mux)
 		slog.Info("Knowledge management API routes registered")
 	}

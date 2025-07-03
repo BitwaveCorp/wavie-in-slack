@@ -15,7 +15,8 @@ import (
 	"github.com/google/uuid"
 )
 
-// StorageManager handles knowledge file storage and retrieval
+// StorageManager handles knowledge file storage and retrieval using the local filesystem
+// It implements the StorageBackend interface
 type StorageManager struct {
 	basePath    string
 	registryPath string

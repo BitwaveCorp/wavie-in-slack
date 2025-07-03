@@ -20,6 +20,14 @@ type LoggingConfig struct {
 type KnowledgeConfig struct {
 	BasePath string `envconfig:"KNOWLEDGE_BASE_PATH" default:"./knowledge"`
 	Enabled  bool   `envconfig:"KNOWLEDGE_ENABLED" default:"true"`
+	
+	// Storage configuration
+	StorageType string `envconfig:"STORAGE_TYPE" default:"local"` // "local" or "gcp"
+	
+	// GCP Storage configuration
+	GCPBucket  string `envconfig:"GCP_STORAGE_BUCKET"` 
+	GCPProject string `envconfig:"GCP_PROJECT_ID"`
+	GCPKeyFile string `envconfig:"GCP_KEY_FILE"` // Optional service account key file
 }
 
 // Config represents the service configuration

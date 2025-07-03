@@ -13,16 +13,16 @@ import (
 
 // Retriever provides access to knowledge files for agents
 type Retriever struct {
-	storageManager *StorageManager
+	storageBackend StorageBackend
 	logger         *slog.Logger
 	cache          map[string][]string // Cache of agent ID to markdown content
 	mutex          sync.RWMutex
 }
 
 // NewRetriever creates a new knowledge retriever
-func NewRetriever(storageManager *StorageManager, logger *slog.Logger) *Retriever {
+func NewRetriever(storageBackend StorageBackend, logger *slog.Logger) *Retriever {
 	return &Retriever{
-		storageManager: storageManager,
+		storageBackend: storageBackend,
 		logger:         logger,
 		cache:          make(map[string][]string),
 		mutex:          sync.RWMutex{},
@@ -40,7 +40,7 @@ func (r *Retriever) GetKnowledgeForAgent(agentID string) ([]string, error) {
 	r.mutex.RUnlock()
 
 	// Get knowledge files for agent
-	files := r.storageManager.GetKnowledgeFilesForAgent(agentID)
+	files := r.storageBackend.GetKnowledgeFilesForAgent(agentID)
 	if len(files) == 0 {
 		return nil, nil
 	}
