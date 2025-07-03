@@ -44,6 +44,18 @@ type UploadResponse struct {
 	Success bool   `json:"success"`
 	FileID  string `json:"file_id,omitempty"`
 	Error   string `json:"error,omitempty"`
+	
+	// Extraction details
+	Extraction *ExtractionDetails `json:"extraction,omitempty"`
+}
+
+// ExtractionDetails contains information about the ZIP extraction process
+type ExtractionDetails struct {
+	Success        bool   `json:"success"`
+	FilesExtracted int    `json:"files_extracted"`
+	MarkdownFiles  int    `json:"markdown_files"`
+	TotalSizeBytes int64  `json:"total_size_bytes"`
+	ErrorMessage   string `json:"error_message,omitempty"`
 }
 
 // ListFilesResponse represents a response to a list files request

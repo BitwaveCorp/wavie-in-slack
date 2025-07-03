@@ -1,11 +1,15 @@
 package knowledge
 
 import (
+	"archive/zip"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -121,8 +125,17 @@ func (sm *GCPStorageManager) saveRegistry(ctx context.Context) error {
 	return nil
 }
 
+// ExtractionResult contains information about the extraction process
+type ExtractionResult struct {
+	Success          bool
+	FilesExtracted   int
+	MarkdownFiles    int
+	TotalSizeBytes   int64
+	Error            error
+}
+
 // StoreKnowledgeFile stores a knowledge file in GCS
-func (sm *GCPStorageManager) StoreKnowledgeFile(name, description string, agentIDs []string, fileData io.Reader, contentType string) (*KnowledgeFile, error) {
+func (sm *GCPStorageManager) StoreKnowledgeFile(name, description string, agentIDs []string, fileData io.Reader, contentType string) (*KnowledgeFile, *ExtractionResult, error) {
 	ctx := context.Background()
 	
 	// Generate unique ID for the file
@@ -132,18 +145,51 @@ func (sm *GCPStorageManager) StoreKnowledgeFile(name, description string, agentI
 	filePath := fmt.Sprintf("files/%s", fileID)
 	zipPath := fmt.Sprintf("%s/content.zip", filePath)
 	
+	// Create a temporary file to store the zip content
+	tempFile, err := os.CreateTemp(sm.localTempDir, "upload-*.zip")
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create temporary file: %w", err)
+	}
+	tempZipPath := tempFile.Name()
+	defer os.Remove(tempZipPath) // Clean up temp file when done
+	
+	// Copy the uploaded data to the temporary file
+	size, err := io.Copy(tempFile, fileData)
+	if err != nil {
+		tempFile.Close()
+		return nil, nil, fmt.Errorf("failed to save uploaded file: %w", err)
+	}
+	tempFile.Close()
+	
 	// Upload the zip file to GCS
 	writer := sm.client.Bucket(sm.bucketName).Object(zipPath).NewWriter(ctx)
 	writer.ContentType = contentType
 	
-	size, err := io.Copy(writer, fileData)
+	zipFile, err := os.Open(tempZipPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to open temporary zip file: %w", err)
+	}
+	defer zipFile.Close()
+	
+	_, err = io.Copy(writer, zipFile)
 	if err != nil {
 		writer.Close()
-		return nil, fmt.Errorf("failed to upload file to GCS: %w", err)
+		return nil, nil, fmt.Errorf("failed to upload file to GCS: %w", err)
 	}
 	
 	if err := writer.Close(); err != nil {
-		return nil, fmt.Errorf("failed to finalize GCS upload: %w", err)
+		return nil, nil, fmt.Errorf("failed to finalize GCS upload: %w", err)
+	}
+	
+	// Extract the zip file and upload the contents to GCS
+	extractionResult, err := sm.extractZipFile(ctx, tempZipPath, filePath)
+	if err != nil {
+		sm.logger.Error("Failed to extract zip file", "error", err)
+		// Continue with the process even if extraction fails
+		extractionResult = &ExtractionResult{
+			Success: false,
+			Error:   err,
+		}
 	}
 	
 	// Create knowledge file record
@@ -165,10 +211,10 @@ func (sm *GCPStorageManager) StoreKnowledgeFile(name, description string, agentI
 	
 	// Save registry
 	if err := sm.saveRegistry(ctx); err != nil {
-		return nil, fmt.Errorf("failed to update registry: %w", err)
+		return nil, extractionResult, fmt.Errorf("failed to update registry: %w", err)
 	}
 	
-	return &knowledgeFile, nil
+	return &knowledgeFile, extractionResult, nil
 }
 
 // GetKnowledgeFilesForAgent returns all knowledge files associated with an agent
@@ -343,4 +389,139 @@ func (sm *GCPStorageManager) CreateAgent(id, name, description, tenantID string)
 // Close closes the GCP client
 func (sm *GCPStorageManager) Close() error {
 	return sm.client.Close()
+}
+
+// extractZipFile extracts a zip file and uploads the contents to GCS
+func (sm *GCPStorageManager) extractZipFile(ctx context.Context, zipPath, gcsFilePath string) (*ExtractionResult, error) {
+	// Create a temporary directory for extraction
+	tempExtractDir, err := os.MkdirTemp(sm.localTempDir, "extract-")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create temporary extraction directory: %w", err)
+	}
+	defer os.RemoveAll(tempExtractDir) // Clean up when done
+
+	// Open the zip file
+	reader, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open zip file: %w", err)
+	}
+	defer reader.Close()
+
+	// Initialize extraction result
+	result := &ExtractionResult{
+		Success:        true,
+		FilesExtracted: 0,
+		MarkdownFiles:  0,
+		TotalSizeBytes: 0,
+	}
+
+	// Extract each file
+	for _, file := range reader.File {
+		// Ensure file path is safe
+		filePath := filepath.Join(tempExtractDir, file.Name)
+		if !strings.HasPrefix(filePath, tempExtractDir) {
+			return nil, fmt.Errorf("invalid file path in zip: %s", file.Name)
+		}
+
+		// Create directory for file if needed
+		if file.FileInfo().IsDir() {
+			if err := os.MkdirAll(filePath, 0755); err != nil {
+				return nil, fmt.Errorf("failed to create directory: %w", err)
+			}
+			continue
+		}
+
+		// Create directory for file if needed
+		if err := os.MkdirAll(filepath.Dir(filePath), 0755); err != nil {
+			return nil, fmt.Errorf("failed to create directory: %w", err)
+		}
+
+		// Create file
+		outFile, err := os.Create(filePath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create file: %w", err)
+		}
+
+		// Open zip file entry
+		rc, err := file.Open()
+		if err != nil {
+			outFile.Close()
+			return nil, fmt.Errorf("failed to open file in zip: %w", err)
+		}
+
+		// Copy content
+		size, err := io.Copy(outFile, rc)
+		outFile.Close()
+		rc.Close()
+		if err != nil {
+			return nil, fmt.Errorf("failed to extract file: %w", err)
+		}
+
+		// Update extraction stats
+		result.FilesExtracted++
+		result.TotalSizeBytes += size
+		if strings.HasSuffix(strings.ToLower(file.Name), ".md") {
+			result.MarkdownFiles++
+		}
+	}
+
+	// Upload extracted files to GCS
+	extractedGCSPath := fmt.Sprintf("%s/extracted", gcsFilePath)
+	err = filepath.Walk(tempExtractDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		// Skip directories
+		if info.IsDir() {
+			return nil
+		}
+
+		// Calculate relative path
+		relPath, err := filepath.Rel(tempExtractDir, path)
+		if err != nil {
+			return fmt.Errorf("failed to get relative path: %w", err)
+		}
+
+		// Create GCS object path
+		gcsObjectPath := fmt.Sprintf("%s/%s", extractedGCSPath, relPath)
+
+		// Open the file
+		file, err := os.Open(path)
+		if err != nil {
+			return fmt.Errorf("failed to open file for upload: %w", err)
+		}
+		defer file.Close()
+
+		// Upload to GCS
+		writer := sm.client.Bucket(sm.bucketName).Object(gcsObjectPath).NewWriter(ctx)
+		
+		// Set content type based on file extension
+		contentType := "application/octet-stream"
+		if strings.HasSuffix(strings.ToLower(path), ".md") {
+			contentType = "text/markdown"
+		} else if strings.HasSuffix(strings.ToLower(path), ".txt") {
+			contentType = "text/plain"
+		}
+		writer.ContentType = contentType
+
+		// Copy file content to GCS
+		if _, err := io.Copy(writer, file); err != nil {
+			writer.Close()
+			return fmt.Errorf("failed to upload extracted file to GCS: %w", err)
+		}
+
+		// Close the writer
+		if err := writer.Close(); err != nil {
+			return fmt.Errorf("failed to finalize extracted file upload: %w", err)
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to upload extracted files: %w", err)
+	}
+
+	return result, nil
 }

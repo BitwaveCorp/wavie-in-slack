@@ -6,8 +6,8 @@ import (
 
 // StorageBackend defines the interface for storage backends
 type StorageBackend interface {
-	// StoreKnowledgeFile stores a knowledge file and returns its metadata
-	StoreKnowledgeFile(name, description string, agentIDs []string, fileData io.Reader, contentType string) (*KnowledgeFile, error)
+	// StoreKnowledgeFile stores a knowledge file and returns its metadata and extraction result
+	StoreKnowledgeFile(name, description string, agentIDs []string, fileData io.Reader, contentType string) (*KnowledgeFile, *ExtractionResult, error)
 	
 	// GetKnowledgeFile retrieves a knowledge file by ID
 	GetKnowledgeFile(id string) (*KnowledgeFile, error)

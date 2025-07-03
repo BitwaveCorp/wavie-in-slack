@@ -79,19 +79,33 @@ func (h *Handler) handleUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create knowledge file
-	knowledgeFile, err := h.storageBackend.StoreKnowledgeFile(name, description, agentIDs, file, "application/zip")
+	knowledgeFile, extractionResult, err := h.storageBackend.StoreKnowledgeFile(name, description, agentIDs, file, "application/zip")
 	if err != nil {
 		h.logger.Error("Failed to add knowledge file", "error", err)
 		http.Error(w, "Failed to add knowledge file: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
+	// Create extraction details for response
+	extractionDetails := &ExtractionDetails{
+		Success:        extractionResult.Success,
+		FilesExtracted: extractionResult.FilesExtracted,
+		MarkdownFiles:  extractionResult.MarkdownFiles,
+		TotalSizeBytes: extractionResult.TotalSizeBytes,
+	}
+
+	// Add error message if extraction failed
+	if !extractionResult.Success && extractionResult.Error != nil {
+		extractionDetails.ErrorMessage = extractionResult.Error.Error()
+	}
+
 	// Return success response
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(UploadResponse{
-		Success: true,
-		FileID:  knowledgeFile.ID,
+		Success:    true,
+		FileID:     knowledgeFile.ID,
+		Extraction: extractionDetails,
 	})
 }
 

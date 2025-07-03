@@ -39,7 +39,11 @@ type StorageConfig struct {
 func NewStorageBackend(ctx context.Context, config StorageConfig, logger *slog.Logger) (StorageBackend, error) {
 	switch config.Type {
 	case LocalStorage:
-		return NewStorageManager(config.LocalPath, logger)
+		sm, err := NewStorageManager(config.LocalPath, logger)
+		if err != nil {
+			return nil, err
+		}
+		return sm, nil
 	case GCPStorage:
 		if config.GCPBucket == "" {
 			return nil, fmt.Errorf("GCP_STORAGE_BUCKET must be set when using GCP storage")

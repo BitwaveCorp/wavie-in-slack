@@ -108,34 +108,68 @@ func (sm *StorageManager) saveRegistry() error {
 	return nil
 }
 
-// StoreKnowledgeFile stores a knowledge file and associates it with agents
-func (sm *StorageManager) StoreKnowledgeFile(name, description string, agentIDs []string, fileData io.Reader, contentType string) (*KnowledgeFile, error) {
+// StoreKnowledgeFile stores a knowledge file
+func (sm *StorageManager) StoreKnowledgeFile(name, description string, agentIDs []string, fileData io.Reader, contentType string) (*KnowledgeFile, *ExtractionResult, error) {
 	// Generate unique ID for the file
 	fileID := uuid.New().String()
 	
-	// Create directory for this knowledge file
+	// Create directory for the file
 	filePath := filepath.Join(sm.basePath, "files", fileID)
 	if err := os.MkdirAll(filePath, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create file directory: %w", err)
+		return nil, nil, fmt.Errorf("failed to create directory: %w", err)
 	}
 	
 	// Save the zip file
 	zipPath := filepath.Join(filePath, "content.zip")
 	outFile, err := os.Create(zipPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create output file: %w", err)
+		return nil, nil, fmt.Errorf("failed to create output file: %w", err)
 	}
 	defer outFile.Close()
 	
 	// Copy the file data
 	size, err := io.Copy(outFile, fileData)
 	if err != nil {
-		return nil, fmt.Errorf("failed to save file: %w", err)
+		return nil, nil, fmt.Errorf("failed to save file: %w", err)
 	}
 	
-	// Extract the zip file
-	if err := sm.extractZipFile(zipPath, filepath.Join(filePath, "extracted")); err != nil {
-		return nil, fmt.Errorf("failed to extract zip file: %w", err)
+	// Extract the zip file and track results
+	extractedPath := filepath.Join(filePath, "extracted")
+	extractResult := &ExtractionResult{
+		Success: true,
+		FilesExtracted: 0,
+		MarkdownFiles: 0,
+		TotalSizeBytes: 0,
+	}
+	
+	if err := sm.extractZipFile(zipPath, extractedPath); err != nil {
+		return nil, &ExtractionResult{Success: false, Error: err}, fmt.Errorf("failed to extract zip file: %w", err)
+	}
+	
+	// Count files and gather stats
+	err = filepath.Walk(extractedPath, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		
+		// Skip directories
+		if info.IsDir() {
+			return nil
+		}
+		
+		// Update extraction stats
+		extractResult.FilesExtracted++
+		extractResult.TotalSizeBytes += info.Size()
+		if strings.HasSuffix(strings.ToLower(path), ".md") {
+			extractResult.MarkdownFiles++
+		}
+		
+		return nil
+	})
+	
+	if err != nil {
+		sm.logger.Warn("Failed to gather extraction stats", "error", err)
+		// Continue with the process even if stats gathering fails
 	}
 	
 	// Create knowledge file record
@@ -157,10 +191,10 @@ func (sm *StorageManager) StoreKnowledgeFile(name, description string, agentIDs 
 	
 	// Save registry
 	if err := sm.saveRegistry(); err != nil {
-		return nil, fmt.Errorf("failed to update registry: %w", err)
+		return nil, extractResult, fmt.Errorf("failed to update registry: %w", err)
 	}
 	
-	return &knowledgeFile, nil
+	return &knowledgeFile, extractResult, nil
 }
 
 // extractZipFile extracts a zip file to the specified directory
