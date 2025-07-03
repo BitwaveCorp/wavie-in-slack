@@ -268,6 +268,34 @@ func (h *Handler) handleUI(w http.ResponseWriter, r *http.Request) {
             margin: 0 auto;
             padding: 20px;
         }
+        .progress-container {
+            width: 100%;
+            background-color: #f1f1f1;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+        .progress-bar {
+            height: 20px;
+            background-color: #4CAF50;
+            border-radius: 4px;
+            width: 0%;
+            transition: width 0.3s;
+        }
+        #extraction-details {
+            background-color: #f9f9f9;
+            border: 1px solid #ddd;
+            padding: 10px;
+            margin-top: 10px;
+            border-radius: 4px;
+        }
+        .success-message {
+            color: #4CAF50;
+            font-weight: bold;
+        }
+        .error-message {
+            color: #f44336;
+            font-weight: bold;
+        }
         h1, h2 {
             color: #333;
         }
@@ -378,6 +406,22 @@ func (h *Handler) handleUI(w http.ResponseWriter, r *http.Request) {
             <div class="form-group">
                 <label for="file">File (ZIP containing markdown files):</label>
                 <input type="file" id="file" name="file" accept=".zip" required>
+            </div>
+            
+            <div id="upload-progress" style="display: none;">
+                <div class="progress-container">
+                    <div class="progress-bar" id="upload-progress-bar"></div>
+                </div>
+                <p id="upload-status">Uploading...</p>
+            </div>
+            
+            <div id="extraction-details" style="display: none;">
+                <h3>Extraction Results</h3>
+                <ul>
+                    <li>Files extracted: <span id="files-extracted">0</span></li>
+                    <li>Markdown files: <span id="markdown-files">0</span></li>
+                    <li>Total size: <span id="total-size">0</span> KB</li>
+                </ul>
             </div>
             
             <div class="form-group">
@@ -509,14 +553,31 @@ func (h *Handler) handleUI(w http.ResponseWriter, r *http.Request) {
                     }
                     
                     let html = '<table>';
-                    html += '<tr><th>Name</th><th>Description</th><th>Agents</th><th>Uploaded</th><th>Size</th><th>Actions</th></tr>';
+                    html += '<tr><th>Name</th><th>Description</th><th>Agents</th><th>Uploaded</th><th>Size</th><th>Extraction</th><th>Actions</th></tr>';
                     
                     data.files.forEach(file => {
                         const date = new Date(file.uploaded_at);
                         const formattedDate = date.toLocaleDateString() + ' ' + date.toLocaleTimeString();
                         const fileSize = (file.file_size / 1024).toFixed(2) + ' KB';
                         
-                        html += '<tr><td>' + file.name + '</td><td>' + (file.description || '') + '</td><td>' + file.agent_ids.join(', ') + '</td><td>' + formattedDate + '</td><td>' + fileSize + '</td><td><button class="delete-btn" data-id="' + file.id + '">Delete</button></td></tr>';
+                        // Add extraction status if available
+                        let extractionStatus = '';
+                        if (file.extraction) {
+                            if (file.extraction.success) {
+                                extractionStatus = '<span class="success-message">' + file.extraction.files_extracted + ' files extracted</span>';
+                                if (file.extraction.markdown_files > 0) {
+                                    extractionStatus += '<br>' + file.extraction.markdown_files + ' markdown files';
+                                }
+                            } else {
+                                extractionStatus = '<span class="error-message">Extraction failed</span>';
+                            }
+                        } else if (file.name.toLowerCase().endsWith('.zip')) {
+                            extractionStatus = 'Not extracted';
+                        } else {
+                            extractionStatus = 'N/A';
+                        }
+                        
+                        html += '<tr><td>' + file.name + '</td><td>' + (file.description || '') + '</td><td>' + file.agent_ids.join(', ') + '</td><td>' + formattedDate + '</td><td>' + fileSize + '</td><td>' + extractionStatus + '</td><td><button class="delete-btn" data-id="' + file.id + '">Delete</button></td></tr>';
                     });
                     
                     html += '</table>';
@@ -546,25 +607,73 @@ func (h *Handler) handleUI(w http.ResponseWriter, r *http.Request) {
                 formData.append('agent_ids', id);
             });
             
+            // Show progress bar
+            const progressContainer = document.getElementById('upload-progress');
+            const progressBar = document.getElementById('upload-progress-bar');
+            const uploadStatus = document.getElementById('upload-status');
+            
+            progressContainer.style.display = 'block';
+            progressBar.style.width = '0%';
+            uploadStatus.textContent = 'Uploading...';
+            
+            // Hide extraction details if previously shown
+            document.getElementById('extraction-details').style.display = 'none';
+            
+            // Simulate progress for upload (since fetch API doesn't provide progress events easily)
+            let progress = 0;
+            const progressInterval = setInterval(() => {
+                if (progress < 90) {
+                    progress += 5;
+                    progressBar.style.width = progress + '%';
+                }
+            }, 300);
+            
             // Submit form
             fetch('/api/knowledge/upload', {
                 method: 'POST',
                 body: formData
             })
             .then(response => {
+                clearInterval(progressInterval);
+                progressBar.style.width = '100%';
+                
                 if (!response.ok) {
                     throw new Error('Upload failed');
                 }
                 return response.json();
             })
             .then(data => {
-                alert('File uploaded successfully!');
-                document.getElementById('upload-form').reset();
-                loadFiles();
+                // Update status
+                uploadStatus.innerHTML = '<span class="success-message">File uploaded successfully!</span>';
+                
+                // Display extraction details if available
+                if (data.extraction) {
+                    const extractionDetails = document.getElementById('extraction-details');
+                    extractionDetails.style.display = 'block';
+                    
+                    document.getElementById('files-extracted').textContent = data.extraction.files_extracted;
+                    document.getElementById('markdown-files').textContent = data.extraction.markdown_files;
+                    document.getElementById('total-size').textContent = (data.extraction.total_size_bytes / 1024).toFixed(2);
+                    
+                    // Show extraction status
+                    if (data.extraction.success) {
+                        uploadStatus.innerHTML += '<br><span class="success-message">Files extracted successfully!</span>';
+                    } else {
+                        uploadStatus.innerHTML += '<br><span class="error-message">Extraction failed: ' + 
+                            (data.extraction.error_message || 'Unknown error') + '</span>';
+                    }
+                }
+                
+                // Reset form and reload files after a delay
+                setTimeout(() => {
+                    document.getElementById('upload-form').reset();
+                    loadFiles();
+                }, 3000);
             })
             .catch(error => {
+                clearInterval(progressInterval);
                 console.error('Error uploading file:', error);
-                alert('Failed to upload file: ' + error.message);
+                uploadStatus.innerHTML = '<span class="error-message">Failed to upload file: ' + error.message + '</span>';
             });
         });
         
