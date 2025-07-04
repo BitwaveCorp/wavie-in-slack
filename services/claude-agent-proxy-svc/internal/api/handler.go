@@ -103,12 +103,31 @@ func (h *Handler) handleChatCompletion(w http.ResponseWriter, r *http.Request) {
 	// Add knowledge context if available
 	var knowledgeContext string
 	if h.knowledge != nil {
+		h.logger.Info("Retrieving knowledge context for agent", 
+			"agent_id", agentID, 
+			"storage_type", h.knowledge.GetStorageBackendType())
+		
+		start := time.Now()
 		context, err := h.knowledge.GetKnowledgeContext(agentID)
+		retrievalTime := time.Since(start)
+		
 		if err != nil {
-			h.logger.Warn("Failed to get knowledge context", "error", err, "agent_id", agentID)
+			h.logger.Warn("Failed to get knowledge context", 
+				"error", err, 
+				"agent_id", agentID, 
+				"storage_type", h.knowledge.GetStorageBackendType())
 		} else if context != "" {
 			knowledgeContext = context
-			h.logger.Info("Added knowledge context to request", "agent_id", agentID, "context_length", len(knowledgeContext))
+			h.logger.Info("Successfully retrieved knowledge context", 
+				"agent_id", agentID, 
+				"storage_type", h.knowledge.GetStorageBackendType(),
+				"context_length", len(knowledgeContext),
+				"retrieval_time_ms", retrievalTime.Milliseconds(),
+				"feeding_to_claude", true)
+		} else {
+			h.logger.Info("No knowledge context available for agent", 
+				"agent_id", agentID, 
+				"storage_type", h.knowledge.GetStorageBackendType())
 		}
 	}
 

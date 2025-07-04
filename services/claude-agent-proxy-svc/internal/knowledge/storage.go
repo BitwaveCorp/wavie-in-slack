@@ -404,3 +404,8 @@ func (sm *StorageManager) CreateAgent(id, name, description, tenantID string) (*
 	
 	return &agentCopy, nil
 }
+
+// GetStorageType returns the type of storage backend
+func (sm *StorageManager) GetStorageType() string {
+	return "local"
+}

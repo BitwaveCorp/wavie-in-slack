@@ -391,6 +391,11 @@ func (sm *GCPStorageManager) Close() error {
 	return sm.client.Close()
 }
 
+// GetStorageType returns the type of storage backend
+func (sm *GCPStorageManager) GetStorageType() string {
+	return "gcp"
+}
+
 // extractZipFile extracts a zip file and uploads the contents to GCS
 func (sm *GCPStorageManager) extractZipFile(ctx context.Context, zipPath, gcsFilePath string) (*ExtractionResult, error) {
 	// Create a temporary directory for extraction

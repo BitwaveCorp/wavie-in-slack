@@ -35,21 +35,29 @@ func (r *Retriever) GetKnowledgeForAgent(agentID string) ([]string, error) {
 	r.mutex.RLock()
 	if content, ok := r.cache[agentID]; ok {
 		r.mutex.RUnlock()
+		r.logger.Info("Using cached knowledge content for agent", "agent_id", agentID, "content_count", len(content))
 		return content, nil
 	}
 	r.mutex.RUnlock()
 
 	// Get knowledge files for agent
+	r.logger.Info("Retrieving knowledge files from storage backend", "agent_id", agentID, "storage_type", r.storageBackend.GetStorageType())
 	files := r.storageBackend.GetKnowledgeFilesForAgent(agentID)
 	if len(files) == 0 {
+		r.logger.Info("No knowledge files found for agent", "agent_id", agentID)
 		return nil, nil
 	}
+	
+	r.logger.Info("Found knowledge files for agent", "agent_id", agentID, "file_count", len(files))
 
 	// Load content from all files
 	var allContent []string
+	markdownCount := 0
 	for _, file := range files {
+		r.logger.Info("Processing knowledge file", "agent_id", agentID, "file_id", file.ID, "file_name", file.Name)
 		// Get markdown files from extracted directory
 		extractedPath := filepath.Join(file.FilePath, "extracted")
+		r.logger.Info("Accessing extracted directory", "path", extractedPath)
 		
 		// Walk through all files in the extracted directory
 		err := filepath.WalkDir(extractedPath, func(path string, d fs.DirEntry, err error) error {
@@ -76,6 +84,8 @@ func (r *Retriever) GetKnowledgeForAgent(agentID string) ([]string, error) {
 			
 			// Add file content to result
 			allContent = append(allContent, string(content))
+			markdownCount++
+			r.logger.Debug("Added markdown file to knowledge content", "path", path, "size_bytes", len(content))
 			return nil
 		})
 		
@@ -83,12 +93,19 @@ func (r *Retriever) GetKnowledgeForAgent(agentID string) ([]string, error) {
 			r.logger.Error("Failed to walk extracted directory", "path", extractedPath, "error", err)
 			continue // Try next file
 		}
+		r.logger.Info("Successfully retrieved files from storage", "agent_id", agentID, "file_id", file.ID, "file_name", file.Name)
 	}
 
 	// Update cache
 	r.mutex.Lock()
 	r.cache[agentID] = allContent
 	r.mutex.Unlock()
+
+	r.logger.Info("Successfully retrieved knowledge content", 
+		"agent_id", agentID, 
+		"file_count", len(files), 
+		"markdown_count", markdownCount, 
+		"total_content_size_bytes", calculateTotalSize(allContent))
 
 	return allContent, nil
 }
@@ -103,8 +120,22 @@ func (r *Retriever) ClearCache() {
 // ClearAgentCache clears the cache for a specific agent
 func (r *Retriever) ClearAgentCache(agentID string) {
 	r.mutex.Lock()
-	defer r.mutex.Unlock()
 	delete(r.cache, agentID)
+	r.mutex.Unlock()
+}
+
+// calculateTotalSize returns the total size in bytes of all content strings
+func calculateTotalSize(contents []string) int {
+	total := 0
+	for _, content := range contents {
+		total += len(content)
+	}
+	return total
+}
+
+// GetStorageBackendType returns the type of the underlying storage backend
+func (r *Retriever) GetStorageBackendType() string {
+	return r.storageBackend.GetStorageType()
 }
 
 // Rough estimate of tokens per character for Claude API

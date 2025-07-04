@@ -29,4 +29,7 @@ type StorageBackend interface {
 	
 	// CreateAgent creates a new agent
 	CreateAgent(id, name, description, tenantID string) (*Agent, error)
+	
+	// GetStorageType returns the type of storage backend (e.g., "local" or "gcp")
+	GetStorageType() string
 }
