@@ -59,6 +59,22 @@ func (r *Retriever) GetKnowledgeForAgent(agentID string) ([]string, error) {
 		extractedPath := filepath.Join(file.FilePath, "extracted")
 		r.logger.Info("Accessing extracted directory", "path", extractedPath)
 		
+		// For GCP storage, ensure the extracted directory is cached locally
+		if r.storageBackend.GetStorageType() == "gcp" {
+			// Use type assertion to access the GCP-specific method
+			if gcpStorage, ok := r.storageBackend.(*GCPStorageManager); ok {
+				localExtractedPath, err := gcpStorage.ensureExtractedDirExists(file.FilePath)
+				if err != nil {
+					r.logger.Error("Failed to ensure extracted directory exists in cache", "path", extractedPath, "error", err)
+					// Skip this file and continue with the next one
+					continue
+				}
+				// Use the local path for walking
+				extractedPath = localExtractedPath
+				r.logger.Info("Using cached extracted directory", "path", localExtractedPath)
+			}
+		}
+		
 		// Walk through all files in the extracted directory
 		err := filepath.WalkDir(extractedPath, func(path string, d fs.DirEntry, err error) error {
 			if err != nil {

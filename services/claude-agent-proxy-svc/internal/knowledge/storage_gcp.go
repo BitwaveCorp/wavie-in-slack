@@ -396,6 +396,107 @@ func (sm *GCPStorageManager) GetStorageType() string {
 	return "gcp"
 }
 
+// ensureLocalCopy ensures that a file exists in the local cache, downloading it from GCP if necessary
+func (sm *GCPStorageManager) ensureLocalCopy(gcsPath string) (string, error) {
+	// Convert GCS path to local cache path
+	localPath := filepath.Join(sm.localTempDir, gcsPath)
+	
+	// Check if file exists in local cache
+	if _, err := os.Stat(localPath); err == nil {
+		// File exists in cache
+		sm.logger.Debug("Using cached file", "path", localPath)
+		return localPath, nil
+	}
+	
+	// File doesn't exist in cache, download from GCP
+	sm.logger.Info("File not in cache, downloading from GCP", "path", gcsPath)
+	
+	// Ensure directory exists
+	if err := os.MkdirAll(filepath.Dir(localPath), 0755); err != nil {
+		return "", fmt.Errorf("failed to create directory for cached file: %w", err)
+	}
+	
+	// Download file from GCP
+	ctx := context.Background()
+	reader, err := sm.client.Bucket(sm.bucketName).Object(gcsPath).NewReader(ctx)
+	if err != nil {
+		return "", fmt.Errorf("failed to get file from GCP: %w", err)
+	}
+	defer reader.Close()
+	
+	// Create local file
+	file, err := os.Create(localPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to create local file: %w", err)
+	}
+	defer file.Close()
+	
+	// Copy content
+	if _, err := io.Copy(file, reader); err != nil {
+		os.Remove(localPath) // Clean up partial file
+		return "", fmt.Errorf("failed to download file: %w", err)
+	}
+	
+	sm.logger.Info("Successfully downloaded file to cache", "gcs_path", gcsPath, "local_path", localPath)
+	return localPath, nil
+}
+
+// ensureExtractedDirExists ensures that an extracted directory exists in the local cache
+// If it doesn't exist, it will download all files from the GCP path to the local cache
+func (sm *GCPStorageManager) ensureExtractedDirExists(filePath string) (string, error) {
+	// Path to the extracted directory in GCS
+	extractedGCSPath := fmt.Sprintf("%s/extracted", filePath)
+	
+	// Local path for the extracted directory
+	localExtractedPath := filepath.Join(sm.localTempDir, extractedGCSPath)
+	
+	// Check if directory exists in local cache
+	if _, err := os.Stat(localExtractedPath); err == nil {
+		// Directory exists in cache
+		sm.logger.Debug("Using cached extracted directory", "path", localExtractedPath)
+		return localExtractedPath, nil
+	}
+	
+	// Directory doesn't exist, create it
+	if err := os.MkdirAll(localExtractedPath, 0755); err != nil {
+		return "", fmt.Errorf("failed to create extracted directory: %w", err)
+	}
+	
+	// List all objects in the extracted directory in GCS
+	sm.logger.Info("Downloading extracted directory from GCP", "path", extractedGCSPath)
+	ctx := context.Background()
+	it := sm.client.Bucket(sm.bucketName).Objects(ctx, &storage.Query{Prefix: extractedGCSPath + "/"})
+	
+	// Download each file
+	fileCount := 0
+	for {
+		attrs, err := it.Next()
+		if err == iterator.Done {
+			break
+		}
+		if err != nil {
+			return "", fmt.Errorf("error listing objects in extracted directory: %w", err)
+		}
+		
+		// Skip the directory itself
+		if attrs.Name == extractedGCSPath+"/" {
+			continue
+		}
+		
+		// Download the file
+		_, err = sm.ensureLocalCopy(attrs.Name)
+		if err != nil {
+			sm.logger.Warn("Failed to download file from extracted directory", "file", attrs.Name, "error", err)
+			continue
+		}
+		
+		fileCount++
+	}
+	
+	sm.logger.Info("Successfully downloaded extracted directory", "path", extractedGCSPath, "file_count", fileCount)
+	return localExtractedPath, nil
+}
+
 // extractZipFile extracts a zip file and uploads the contents to GCS
 func (sm *GCPStorageManager) extractZipFile(ctx context.Context, zipPath, gcsFilePath string) (*ExtractionResult, error) {
 	// Create a temporary directory for extraction
