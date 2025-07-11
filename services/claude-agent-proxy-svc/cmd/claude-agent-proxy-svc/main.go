@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -20,6 +21,20 @@ import (
 )
 
 func main() {
+	// Set up panic recovery to ensure we log any fatal errors
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Fprintf(os.Stderr, "FATAL PANIC: %v\n", r)
+			// Try to log to stdout as well in case stderr isn't captured
+			fmt.Printf("FATAL PANIC: %v\n", r)
+			os.Exit(1)
+		}
+	}()
+	
+	// Log startup immediately to stderr and stdout to ensure it's captured
+	fmt.Fprintf(os.Stderr, "Starting claude-agent-proxy-svc\n")
+	fmt.Printf("Starting claude-agent-proxy-svc\n")
+	
 	// Set up basic logging first
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
@@ -120,13 +135,37 @@ func main() {
 			GCPKeyFile: cfg.Knowledge.GCPKeyFile,
 		}
 		
-		// Create storage backend using factory
+		// Log storage configuration details before initialization
+		slog.Info("Initializing storage backend with config", 
+			"storage_type", storageConfig.Type, 
+			"local_dir", storageConfig.LocalPath,
+			"gcp_bucket", storageConfig.GCPBucket,
+			"gcp_project", storageConfig.GCPProject,
+			"gcp_key_file_set", storageConfig.GCPKeyFile != "")
+	
+		// Try to initialize storage backend with timeout
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+	
+		slog.Info("Calling NewStorageBackend")
 		var err error
-		storageBackend, err = knowledge.NewStorageBackend(context.Background(), storageConfig, logger)
+		storageBackend, err = knowledge.NewStorageBackend(ctx, storageConfig, logger)
 		if err != nil {
-			slog.Error("Failed to initialize knowledge storage backend", "error", err, "storage_type", storageConfig.Type)
+			slog.Error("Failed to initialize knowledge storage backend", 
+				"error", err, 
+				"error_type", fmt.Sprintf("%T", err),
+				"storage_type", storageConfig.Type)
+			
+			// Try to log more details about GCP errors
+			if storageConfig.Type == "gcp" {
+				slog.Error("GCP storage backend initialization failed", 
+					"gcp_bucket", storageConfig.GCPBucket,
+					"gcp_project", storageConfig.GCPProject)
+			}
+		
 			os.Exit(1)
 		}
+		slog.Info("Storage backend initialized successfully", "storage_type", storageConfig.Type)
 
 		// Create knowledge retriever
 		knowledgeRetriever = knowledge.NewRetriever(storageBackend, logger)
@@ -150,13 +189,34 @@ func main() {
 		slog.Info("Knowledge management API routes registered")
 	}
 
+	// Validate and log port configuration
+	portStr := os.Getenv("PORT")
+	slog.Info("Port configuration", "config_port", cfg.Port, "env_PORT", portStr)
+	
+	// In Cloud Run, the PORT environment variable must be respected
+	serverPort := cfg.Port
+	if portStr != "" {
+		if parsedPort, err := strconv.Atoi(portStr); err == nil {
+			if parsedPort != cfg.Port {
+				slog.Warn("PORT environment variable differs from config port, using PORT env var", 
+					"env_port", parsedPort, "config_port", cfg.Port)
+				serverPort = parsedPort
+			}
+		} else {
+			slog.Error("Failed to parse PORT environment variable", "PORT", portStr, "error", err)
+		}
+	}
+	
+	// Start HTTP server
+	serverAddr := fmt.Sprintf(":%d", serverPort)
+	slog.Info("Starting HTTP server", "address", serverAddr)
 	server := &http.Server{
-		Addr:    fmt.Sprintf(":%d", cfg.Port),
+		Addr:    serverAddr,
 		Handler: mux,
 	}
 
 	go func() {
-		slog.Info("Starting HTTP server", "port", cfg.Port)
+		slog.Info("Starting HTTP server", "port", serverPort)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			slog.Error("HTTP server failed", "error", err)
 		}
