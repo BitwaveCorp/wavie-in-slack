@@ -1,11 +1,14 @@
 package knowledge
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
 	"path/filepath"
+	"strings"
+	"time"
 )
 
 // Handler handles HTTP requests for knowledge management
@@ -135,6 +138,8 @@ type DeleteFileRequest struct {
 type DeleteFileResponse struct {
 	Success bool   `json:"success"`
 	Error   string `json:"error,omitempty"`
+	Details string `json:"details,omitempty"`
+	Message string `json:"message,omitempty"`
 }
 
 // handleDeleteFile handles deleting a knowledge file
@@ -144,37 +149,98 @@ func (h *Handler) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Create a context with timeout for the entire operation
+	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
+	defer cancel()
+
 	// Parse request body
 	var req DeleteFileRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		h.logger.Error("Failed to parse request body", "error", err)
-		http.Error(w, "Failed to parse request body", http.StatusBadRequest)
+		respondWithError(w, "Invalid request format", http.StatusBadRequest)
 		return
 	}
 
 	// Validate request
 	if req.ID == "" {
-		http.Error(w, "File ID is required", http.StatusBadRequest)
+		respondWithError(w, "File ID is required", http.StatusBadRequest)
 		return
 	}
 
-	// Delete file
-	err := h.storageBackend.DeleteKnowledgeFile(req.ID)
-	if err != nil {
-		h.logger.Error("Failed to delete knowledge file", "error", err)
+	// Log the delete request
+	h.logger.Info("Processing file deletion request", "file_id", req.ID, "remote_addr", r.RemoteAddr)
+
+	// Create a channel to handle timeout for the delete operation
+	deleteDone := make(chan struct{
+		err error
+		success bool
+	}, 1)
+
+	// Execute delete operation in a goroutine
+	go func() {
+		err := h.storageBackend.DeleteKnowledgeFile(req.ID)
+		deleteDone <- struct {
+			err error
+			success bool
+		}{err, err == nil}
+	}()
+
+	// Wait for either completion or timeout
+	select {
+	case result := <-deleteDone:
+		if result.err != nil {
+			h.logger.Error("Failed to delete knowledge file", "error", result.err, "file_id", req.ID)
+			
+			// Determine appropriate status code based on error
+			statusCode := http.StatusInternalServerError
+			errorMessage := "Failed to delete file"
+			
+			if strings.Contains(result.err.Error(), "not found") {
+				statusCode = http.StatusNotFound
+				errorMessage = "File not found"
+			} else if strings.Contains(result.err.Error(), "deadline exceeded") {
+				statusCode = http.StatusGatewayTimeout
+				errorMessage = "Operation timed out"
+			}
+			
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(statusCode)
+			json.NewEncoder(w).Encode(DeleteFileResponse{
+				Success: false,
+				Error:   errorMessage,
+				Details: result.err.Error(),
+			})
+			return
+		}
+		
+		// Success case
+		h.logger.Info("Successfully deleted knowledge file", "file_id", req.ID)
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(DeleteFileResponse{
+			Success: true,
+			Message: "File successfully deleted",
+		})
+		
+	case <-ctx.Done():
+		// Request timeout
+		h.logger.Error("Delete operation timed out", "file_id", req.ID, "error", ctx.Err())
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusGatewayTimeout)
 		json.NewEncoder(w).Encode(DeleteFileResponse{
 			Success: false,
-			Error:   err.Error(),
+			Error:   "Operation timed out",
+			Details: "The server took too long to process your request. The deletion may still be in progress.",
 		})
-		return
 	}
+}
 
-	// Return success response
+// respondWithError is a helper function to send error responses in a consistent format
+func respondWithError(w http.ResponseWriter, message string, statusCode int) {
 	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
 	json.NewEncoder(w).Encode(DeleteFileResponse{
-		Success: true,
+		Success: false,
+		Error:   message,
 	})
 }
 

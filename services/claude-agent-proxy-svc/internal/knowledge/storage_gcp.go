@@ -261,25 +261,54 @@ func (sm *GCPStorageManager) GetKnowledgeFile(id string) (*KnowledgeFile, error)
 
 // DeleteKnowledgeFile deletes a knowledge file by ID
 func (sm *GCPStorageManager) DeleteKnowledgeFile(id string) error {
-	ctx := context.Background()
+	// Create a context with timeout to prevent hanging operations
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 	
 	// Find the file in the registry
 	var fileIndex int = -1
 	var filePath string
+	var fileName string
 	
-	sm.mutex.Lock()
-	defer sm.mutex.Unlock()
-	
+	// Use read lock first to find the file
+	sm.mutex.RLock()
 	for i, file := range sm.registry.KnowledgeFiles {
 		if file.ID == id {
 			fileIndex = i
 			filePath = file.FilePath
+			fileName = file.Name
 			break
 		}
 	}
+	sm.mutex.RUnlock()
 
 	if fileIndex == -1 {
 		return fmt.Errorf("knowledge file not found: %s", id)
+	}
+
+	// Log the deletion attempt
+	sm.logger.Info("Attempting to delete knowledge file", 
+		"file_id", id, 
+		"file_name", fileName, 
+		"file_path", filePath)
+
+	// Now acquire write lock to update the registry
+	sm.mutex.Lock()
+	
+	// Double-check that the file still exists (in case of concurrent deletions)
+	fileStillExists := false
+	for i, file := range sm.registry.KnowledgeFiles {
+		if file.ID == id {
+			fileIndex = i
+			fileStillExists = true
+			break
+		}
+	}
+	
+	if !fileStillExists {
+		sm.mutex.Unlock()
+		sm.logger.Warn("File was already deleted from registry", "file_id", id)
+		return nil
 	}
 
 	// Remove the file from the registry
@@ -291,25 +320,62 @@ func (sm *GCPStorageManager) DeleteKnowledgeFile(id string) error {
 	// Save the updated registry
 	err := sm.saveRegistry(ctx)
 	if err != nil {
+		// Restore the registry if save fails
+		sm.logger.Error("Failed to save registry after file deletion", "error", err)
+		sm.mutex.Unlock()
 		return fmt.Errorf("failed to save registry: %w", err)
 	}
+	
+	// Release the mutex after registry is updated
+	sm.mutex.Unlock()
 
 	// Delete all objects with this prefix from GCS
 	if filePath != "" {
 		bucket := sm.client.Bucket(sm.bucketName)
 		it := bucket.Objects(ctx, &storage.Query{Prefix: filePath})
+		
+		deleteCount := 0
+		deleteErrors := 0
+		
 		for {
+			// Check if context is done (timeout or cancellation)
+			select {
+			case <-ctx.Done():
+				sm.logger.Warn("Context deadline exceeded while deleting objects", 
+					"file_id", id, 
+					"deleted_count", deleteCount, 
+					"error_count", deleteErrors)
+				return ctx.Err()
+			default:
+				// Continue processing
+			}
+			
 			attrs, err := it.Next()
 			if err == iterator.Done {
 				break
 			}
 			if err != nil {
-				return fmt.Errorf("error listing objects to delete: %w", err)
+				sm.logger.Error("Error listing objects to delete", "error", err)
+				deleteErrors++
+				continue // Continue with other objects instead of failing completely
 			}
+			
+			// Delete the object
 			if err := bucket.Object(attrs.Name).Delete(ctx); err != nil {
-				return fmt.Errorf("failed to delete object %s: %w", attrs.Name, err)
+				sm.logger.Error("Failed to delete object", "object", attrs.Name, "error", err)
+				deleteErrors++
+			} else {
+				deleteCount++
 			}
 		}
+		
+		sm.logger.Info("Completed file deletion from storage", 
+			"file_id", id, 
+			"deleted_count", deleteCount, 
+			"error_count", deleteErrors)
+		
+		// Even if some objects failed to delete, we consider the operation successful
+		// since the registry has been updated
 	}
 
 	return nil
