@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -19,20 +20,78 @@ import (
 )
 
 func main() {
-	slog.Info("Starting claude-agent-proxy-svc")
-
+	// Set up basic logging first
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
+	
+	slog.Info("Starting claude-agent-proxy-svc")
+	
+	// Log all environment variables at startup
+	slog.Info("Environment variables at startup:")
+	for _, env := range os.Environ() {
+		parts := strings.SplitN(env, "=", 2)
+		if len(parts) == 2 {
+			key := parts[0]
+			value := parts[1]
+			
+			// Mask sensitive values
+			if strings.Contains(strings.ToLower(key), "key") || 
+			   strings.Contains(strings.ToLower(key), "secret") || 
+			   strings.Contains(strings.ToLower(key), "password") || 
+			   strings.Contains(strings.ToLower(key), "token") {
+				if len(value) > 8 {
+					value = value[:4] + "..." + value[len(value)-4:]
+				} else {
+					value = "***masked***"
+				}
+			}
+			
+			slog.Info("ENV", "key", key, "value", value)
+		}
+	}
 
 	if err := godotenv.Load(); err != nil {
 		slog.Info("No .env file found or error loading it", "error", err)
 	}
 
+	slog.Info("Starting config processing")
 	var cfg config.Config
+	
+	// Log the required environment variables before processing
+	claudeAPIKey := os.Getenv("CLAUDE_API_KEY")
+	if claudeAPIKey == "" {
+		slog.Error("CLAUDE_API_KEY environment variable is not set")
+	} else {
+		prefix := ""
+		if len(claudeAPIKey) >= 4 {
+			prefix = claudeAPIKey[:4]
+		} else {
+			prefix = claudeAPIKey
+		}
+		slog.Info("CLAUDE_API_KEY is set", "length", len(claudeAPIKey), "prefix", prefix)
+	}
+	
+	storageType := os.Getenv("STORAGE_TYPE")
+	slog.Info("Storage configuration", "STORAGE_TYPE", storageType)
+	
+	if storageType == "gcp" {
+		gcpBucket := os.Getenv("GCP_STORAGE_BUCKET")
+		gcpProject := os.Getenv("GCP_PROJECT_ID")
+		slog.Info("GCP storage configuration", 
+			"GCP_STORAGE_BUCKET", gcpBucket, 
+			"GCP_PROJECT_ID", gcpProject, 
+			"GCP_KEY_FILE_SET", os.Getenv("GCP_KEY_FILE") != "")
+	}
+	
+	// Process config
+	slog.Info("Processing configuration with envconfig")
 	if err := envconfig.Process("", &cfg); err != nil {
 		slog.Error("Failed to process config", "error", err)
+		// Log more details about the error
+		slog.Error("Config processing error details", "error_type", fmt.Sprintf("%T", err), "error_string", err.Error())
 		os.Exit(1)
 	}
+	slog.Info("Configuration processed successfully")
 
 	var level slog.Level
 	if err := level.UnmarshalText([]byte(cfg.LogLevel)); err == nil {
