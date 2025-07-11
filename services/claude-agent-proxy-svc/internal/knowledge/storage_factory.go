@@ -35,16 +35,22 @@ type StorageConfig struct {
 	GCPKeyFile string `envconfig:"GCP_KEY_FILE"`
 }
 
-// NewStorageBackend creates a new storage backend based on configuration
+// NewStorageBackend creates a storage backend based on the provided configuration
 func NewStorageBackend(ctx context.Context, config StorageConfig, logger *slog.Logger) (StorageBackend, error) {
+	logger.Info("Creating storage backend", "type", config.Type, "local_path", config.LocalPath, 
+		"gcp_bucket", config.GCPBucket, "gcp_project", config.GCPProject, "gcp_key_file_provided", config.GCPKeyFile != "")
+	
 	switch config.Type {
 	case LocalStorage:
+		logger.Info("Initializing local storage backend", "path", config.LocalPath)
 		sm, err := NewStorageManager(config.LocalPath, logger)
 		if err != nil {
+			logger.Error("Failed to initialize local storage backend", "error", err)
 			return nil, err
 		}
 		return sm, nil
 	case GCPStorage:
+		logger.Info("Initializing GCP storage backend", "bucket", config.GCPBucket, "project", config.GCPProject)
 		if config.GCPBucket == "" {
 			return nil, fmt.Errorf("GCP_STORAGE_BUCKET must be set when using GCP storage")
 		}

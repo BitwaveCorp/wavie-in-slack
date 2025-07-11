@@ -32,10 +32,15 @@ type GCPStorageManager struct {
 
 // NewGCPStorageManager creates a new GCP storage manager
 func NewGCPStorageManager(ctx context.Context, bucketName, registryKey string, logger *slog.Logger, localTempDir string, opts ...option.ClientOption) (*GCPStorageManager, error) {
+	logger.Info("Creating GCP storage manager", "bucket", bucketName, "registry_key", registryKey, "temp_dir", localTempDir)
+	
+	logger.Info("Initializing GCP storage client")
 	client, err := storage.NewClient(ctx, opts...)
 	if err != nil {
+		logger.Error("Failed to create GCP storage client", "error", err)
 		return nil, fmt.Errorf("failed to create GCP storage client: %w", err)
 	}
+	logger.Info("GCP storage client created successfully")
 
 	sm := &GCPStorageManager{
 		bucketName:   bucketName,
@@ -50,14 +55,18 @@ func NewGCPStorageManager(ctx context.Context, bucketName, registryKey string, l
 	}
 
 	// Check if bucket exists, create if it doesn't
+	sm.logger.Info("Ensuring bucket exists", "bucket", sm.bucketName)
 	if err := sm.ensureBucketExists(ctx); err != nil {
+		sm.logger.Error("Failed to ensure bucket exists", "error", err)
 		return nil, fmt.Errorf("failed to ensure bucket exists: %w", err)
 	}
 
 	// Load existing registry if it exists
+	sm.logger.Info("Loading registry")
 	if err := sm.loadRegistry(ctx); err != nil {
 		// If registry doesn't exist, create default agent
 		if err == storage.ErrObjectNotExist {
+			sm.logger.Info("Registry does not exist, creating default registry")
 			defaultAgent := Agent{
 				ID:          "wavie-bot",
 				Name:        "Wavie Bot",
@@ -68,9 +77,12 @@ func NewGCPStorageManager(ctx context.Context, bucketName, registryKey string, l
 			sm.registry.Agents = append(sm.registry.Agents, defaultAgent)
 			
 			if err := sm.saveRegistry(ctx); err != nil {
+				sm.logger.Error("Failed to save initial registry", "error", err)
 				return nil, fmt.Errorf("failed to save initial registry: %w", err)
 			}
+			sm.logger.Info("Initial registry created and saved successfully")
 		} else {
+			sm.logger.Error("Failed to load registry", "error", err)
 			return nil, fmt.Errorf("failed to load registry: %w", err)
 		}
 	}
@@ -80,23 +92,32 @@ func NewGCPStorageManager(ctx context.Context, bucketName, registryKey string, l
 
 // ensureBucketExists checks if the bucket exists and creates it if it doesn't
 func (sm *GCPStorageManager) ensureBucketExists(ctx context.Context) error {
+	sm.logger.Info("Checking if bucket exists", "bucket", sm.bucketName)
 	bucket := sm.client.Bucket(sm.bucketName)
 	_, err := bucket.Attrs(ctx)
 	if err == storage.ErrBucketNotExist {
+		sm.logger.Info("Bucket does not exist, attempting to create", "bucket", sm.bucketName)
 		if err := bucket.Create(ctx, "", nil); err != nil {
+			sm.logger.Error("Failed to create bucket", "bucket", sm.bucketName, "error", err)
 			return fmt.Errorf("failed to create bucket: %w", err)
 		}
+		sm.logger.Info("Bucket created successfully", "bucket", sm.bucketName)
 	} else if err != nil {
+		sm.logger.Error("Failed to check if bucket exists", "bucket", sm.bucketName, "error", err)
 		return fmt.Errorf("failed to check if bucket exists: %w", err)
+	} else {
+		sm.logger.Info("Bucket exists", "bucket", sm.bucketName)
 	}
 	return nil
 }
 
 // loadRegistry loads the registry from GCS
 func (sm *GCPStorageManager) loadRegistry(ctx context.Context) error {
+	sm.logger.Info("Loading registry from GCS", "bucket", sm.bucketName, "key", sm.registryKey)
 	sm.mutex.Lock()
 	defer sm.mutex.Unlock()
 
+	sm.logger.Info("Attempting to read registry object")
 	reader, err := sm.client.Bucket(sm.bucketName).Object(sm.registryKey).NewReader(ctx)
 	if err != nil {
 		return err
@@ -112,16 +133,21 @@ func (sm *GCPStorageManager) loadRegistry(ctx context.Context) error {
 
 // saveRegistry saves the registry to GCS
 func (sm *GCPStorageManager) saveRegistry(ctx context.Context) error {
+	sm.logger.Info("Saving registry to GCS", "bucket", sm.bucketName, "key", sm.registryKey)
 	sm.mutex.Lock()
 	defer sm.mutex.Unlock()
 
+	sm.logger.Info("Creating new writer for registry object")
 	writer := sm.client.Bucket(sm.bucketName).Object(sm.registryKey).NewWriter(ctx)
 	defer writer.Close()
 
+	sm.logger.Info("Encoding and writing registry data")
 	if err := json.NewEncoder(writer).Encode(sm.registry); err != nil {
+		sm.logger.Error("Failed to encode registry", "error", err)
 		return fmt.Errorf("failed to encode registry: %w", err)
 	}
 
+	sm.logger.Info("Registry saved successfully")
 	return nil
 }
 
