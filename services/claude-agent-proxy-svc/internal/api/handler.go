@@ -1,13 +1,17 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/BitwaveCorp/slack-wavie-bot-system-upgraded/services/claude-agent-proxy-svc/internal/config"
 	"github.com/BitwaveCorp/slack-wavie-bot-system-upgraded/services/claude-agent-proxy-svc/internal/knowledge"
 	"github.com/BitwaveCorp/slack-wavie-bot-system-upgraded/services/claude-agent-proxy-svc/internal/openai"
 )
@@ -35,17 +39,21 @@ type GPTResponse struct {
 	Error         string `json:"error,omitempty"`
 }
 
+// Handler handles API requests
 type Handler struct {
 	openaiClient *openai.Client
-	logger       *slog.Logger
 	knowledge    *knowledge.Retriever
+	logger       *slog.Logger
+	ragConfig    *config.RAGConfig
 }
 
-func NewHandler(openaiClient *openai.Client, logger *slog.Logger, knowledgeRetriever *knowledge.Retriever) *Handler {
+// NewHandler creates a new API handler
+func NewHandler(openaiClient *openai.Client, logger *slog.Logger, knowledgeRetriever *knowledge.Retriever, ragConfig *config.RAGConfig) *Handler {
 	return &Handler{
 		openaiClient: openaiClient,
-		logger:       logger,
 		knowledge:    knowledgeRetriever,
+		logger:       logger,
+		ragConfig:    ragConfig,
 	}
 }
 
@@ -102,7 +110,77 @@ func (h *Handler) handleChatCompletion(w http.ResponseWriter, r *http.Request) {
 
 	// Add knowledge context if available
 	var knowledgeContext string
-	if h.knowledge != nil {
+	
+	// First try to get context from RAG service if enabled
+	var ragContext string
+	if h.ragConfig != nil && h.ragConfig.Enabled && h.ragConfig.URL != "" {
+		h.logger.Info("Retrieving context from RAG service", 
+			"agent_id", agentID, 
+			"rag_url", h.ragConfig.URL)
+		
+		// Create request payload
+		reqBody, err := json.Marshal(map[string]string{
+			"query": req.Message,
+		})
+		if err != nil {
+			h.logger.Error("Failed to marshal RAG ask request", "error", err)
+		} else {
+			// Send to RAG service
+			start := time.Now()
+			resp, err := http.Post(
+				h.ragConfig.URL + "/api/ask",
+				"application/json",
+				bytes.NewBuffer(reqBody),
+			)
+			retrievalTime := time.Since(start)
+			
+			if err != nil {
+				h.logger.Error("Failed to send query to RAG service", "error", err)
+			} else {
+				defer resp.Body.Close()
+				
+				// Check response
+				if resp.StatusCode != http.StatusOK {
+					respBody, _ := io.ReadAll(resp.Body)
+					h.logger.Error("RAG service returned error", 
+						"status", resp.Status,
+						"response", string(respBody))
+				} else {
+					// Parse response
+					var ragResp struct {
+						Chunks []struct {
+							Content string `json:"content"`
+							Score   float64 `json:"score"`
+						} `json:"chunks"`
+					}
+					
+					if err := json.NewDecoder(resp.Body).Decode(&ragResp); err != nil {
+						h.logger.Error("Failed to decode RAG response", "error", err)
+					} else if len(ragResp.Chunks) > 0 {
+						// Build context from chunks
+						var builder strings.Builder
+						builder.WriteString("# Relevant Context\n\n")
+						
+						for i, chunk := range ragResp.Chunks {
+							builder.WriteString(fmt.Sprintf("## Document %d (Score: %.2f)\n\n%s\n\n", 
+								i+1, chunk.Score, chunk.Content))
+						}
+						
+						ragContext = builder.String()
+						h.logger.Info("Successfully retrieved context from RAG service", 
+							"chunk_count", len(ragResp.Chunks),
+							"context_length", len(ragContext),
+							"retrieval_time_ms", retrievalTime.Milliseconds())
+					} else {
+						h.logger.Info("No relevant chunks found in RAG service")
+					}
+				}
+			}
+		}
+	}
+	
+	// Then try traditional knowledge retrieval if RAG didn't provide context
+	if ragContext == "" && h.knowledge != nil {
 		h.logger.Info("Retrieving knowledge context for agent", 
 			"agent_id", agentID, 
 			"storage_type", h.knowledge.GetStorageBackendType())
@@ -129,6 +207,11 @@ func (h *Handler) handleChatCompletion(w http.ResponseWriter, r *http.Request) {
 				"agent_id", agentID, 
 				"storage_type", h.knowledge.GetStorageBackendType())
 		}
+	}
+	
+	// Use RAG context if available, otherwise use knowledge context
+	if ragContext != "" {
+		knowledgeContext = ragContext
 	}
 
 	// Use conversation history if available

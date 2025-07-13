@@ -120,6 +120,8 @@ func main() {
 		"claude_model", cfg.ClaudeModel,
 		"knowledge_enabled", cfg.KnowledgeEnabled,
 		"knowledge_path", cfg.KnowledgeBasePath,
+		"rag_enabled", cfg.RAG.Enabled,
+		"rag_service_url", cfg.RAG.URL,
 	)
 
 	// Initialize knowledge management system if enabled
@@ -177,14 +179,14 @@ func main() {
 	}
 
 	claudeClient := openai.NewClient(cfg.ClaudeAPIKey, cfg.ClaudeModel, logger)
-	handler := api.NewHandler(claudeClient, logger, knowledgeRetriever)
+	handler := api.NewHandler(claudeClient, logger, knowledgeRetriever, &cfg.RAG)
 
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux)
 	
 	// Register knowledge management routes if enabled
 	if cfg.KnowledgeEnabled && storageBackend != nil {
-		knowledgeHandler := knowledge.NewHandler(storageBackend, logger)
+		knowledgeHandler := knowledge.NewHandler(storageBackend, logger, &cfg.RAG)
 		knowledgeHandler.RegisterRoutes(mux)
 		slog.Info("Knowledge management API routes registered")
 	}

@@ -1,14 +1,19 @@
 package knowledge
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/BitwaveCorp/slack-wavie-bot-system-upgraded/services/claude-agent-proxy-svc/internal/config"
 )
 
 // Handler handles HTTP requests for knowledge management
@@ -16,14 +21,16 @@ type Handler struct {
 	storageBackend StorageBackend
 	logger         *slog.Logger
 	maxUploadSize  int64
+	ragConfig      *config.RAGConfig
 }
 
 // NewHandler creates a new knowledge handler
-func NewHandler(storageBackend StorageBackend, logger *slog.Logger) *Handler {
+func NewHandler(storageBackend StorageBackend, logger *slog.Logger, ragConfig *config.RAGConfig) *Handler {
 	return &Handler{
 		storageBackend: storageBackend,
 		logger:         logger,
 		maxUploadSize:  50 * 1024 * 1024, // 50MB max upload size
+		ragConfig:      ragConfig,
 	}
 }
 
@@ -87,6 +94,98 @@ func (h *Handler) handleUpload(w http.ResponseWriter, r *http.Request) {
 		h.logger.Error("Failed to add knowledge file", "error", err)
 		http.Error(w, "Failed to add knowledge file: "+err.Error(), http.StatusInternalServerError)
 		return
+	}
+	
+	// Send to RAG service for embedding generation if enabled
+	if h.ragConfig != nil && h.ragConfig.Enabled && h.ragConfig.URL != "" {
+		// Get the extracted directory path
+		extractedPath := filepath.Join(knowledgeFile.FilePath, "extracted")
+		h.logger.Info("Processing extracted directory for RAG service", "path", extractedPath)
+		
+		// For GCP storage, ensure the extracted directory is cached locally
+		var localExtractedPath string
+		if h.storageBackend.GetStorageType() == "gcp" {
+			// Use type assertion to access the GCP-specific method
+			if gcpStorage, ok := h.storageBackend.(*GCPStorageManager); ok {
+				path, err := gcpStorage.ensureExtractedDirExists(knowledgeFile.FilePath)
+				if err != nil {
+					h.logger.Error("Failed to ensure extracted directory exists in cache", "path", extractedPath, "error", err)
+				} else {
+					localExtractedPath = path
+					h.logger.Info("Using cached extracted directory", "path", localExtractedPath)
+				}
+			}
+		}
+		
+		// If we have a local path, process the markdown files
+		if localExtractedPath != "" {
+			// Walk through all files in the extracted directory
+			filepath.WalkDir(localExtractedPath, func(path string, d fs.DirEntry, err error) error {
+				if err != nil {
+					return nil // Skip errors and continue
+				}
+				
+				// Skip directories
+				if d.IsDir() {
+					return nil
+				}
+				
+				// Only process markdown files
+				if !strings.HasSuffix(strings.ToLower(path), ".md") {
+					return nil
+				}
+				
+				// Get relative path for the file
+				relPath, err := filepath.Rel(localExtractedPath, path)
+				if err != nil {
+					h.logger.Error("Failed to get relative path", "path", path, "error", err)
+					return nil
+				}
+				
+				// Create GCS path for the file
+				gcsFilePath := fmt.Sprintf("%s/extracted/%s", knowledgeFile.FilePath, relPath)
+				
+				h.logger.Info("Sending file to RAG service for embedding generation", 
+					"file_path", gcsFilePath,
+					"document_id", knowledgeFile.ID + "-" + relPath)
+				
+				// Create request payload
+				reqBody, err := json.Marshal(map[string]string{
+					"document_id": knowledgeFile.ID + "-" + relPath,
+					"file_path": gcsFilePath,
+				})
+				if err != nil {
+					h.logger.Error("Failed to marshal RAG request", "error", err)
+					return nil
+				}
+				
+				// Send to RAG service
+				resp, err := http.Post(
+					h.ragConfig.URL + "/api/documents",
+					"application/json",
+					bytes.NewBuffer(reqBody),
+				)
+				if err != nil {
+					h.logger.Error("Failed to send file to RAG service", "error", err)
+					return nil
+				}
+				defer resp.Body.Close()
+				
+				// Check response
+				if resp.StatusCode != http.StatusOK {
+					respBody, _ := io.ReadAll(resp.Body)
+					h.logger.Error("RAG service returned error", 
+						"status", resp.Status,
+						"response", string(respBody))
+					return nil
+				}
+				
+				h.logger.Info("Successfully sent file to RAG service", "file_path", gcsFilePath)
+				return nil
+			})
+		} else {
+			h.logger.Warn("Could not process files for RAG service: no local path available")
+		}
 	}
 
 	// Create extraction details for response

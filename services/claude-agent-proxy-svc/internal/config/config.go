@@ -16,6 +16,12 @@ type LoggingConfig struct {
 	Level string `envconfig:"LOG_LEVEL" default:"info"`
 }
 
+// RAGConfig represents RAG service configuration
+type RAGConfig struct {
+	Enabled bool   `envconfig:"RAG_ENABLED" default:"true"`
+	URL     string `envconfig:"RAG_SERVICE_URL" default:"http://localhost:8084"`
+}
+
 // KnowledgeConfig represents knowledge base configuration
 type KnowledgeConfig struct {
 	BasePath string `envconfig:"KNOWLEDGE_BASE_PATH" default:"./knowledge"`
@@ -47,4 +53,5 @@ type Config struct {
 	OpenAI    OpenAIConfig
 	Logging   LoggingConfig
 	Knowledge KnowledgeConfig
+	RAG       RAGConfig
 }
