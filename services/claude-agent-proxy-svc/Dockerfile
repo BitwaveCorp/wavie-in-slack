@@ -64,7 +64,7 @@ COPY --from=builder /app/main .
 RUN echo '#!/bin/sh\necho "=== Container starting ==="\necho "=== Environment variables (non-sensitive) ==="\nenv | grep -v -i "key\|secret\|password\|token" || true\necho "=== Starting application ==="\nexec "$@"' > /entrypoint.sh && \
     chmod +x /entrypoint.sh
 
-EXPOSE 8081
+EXPOSE 8083
 
 # Use the entrypoint script to log before starting the application
 ENTRYPOINT ["/entrypoint.sh"]

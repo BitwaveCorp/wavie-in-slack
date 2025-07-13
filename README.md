@@ -81,13 +81,13 @@ The system supports multiple agents, each with their own specialized knowledge b
 cd services/claude-agent-proxy-svc && go run cmd/claude-agent-proxy-svc/main.go
 ```
 
-2. **Access the Knowledge Management UI** at `http://localhost:8081/knowledge`
+2. **Access the Knowledge Management UI** at `http://localhost:8083/knowledge`
 
 3. **Create Agents** using the web interface or API:
 
 ```bash
 # Create a new agent via API
-curl -X POST http://localhost:8081/api/knowledge/agents -H "Content-Type: application/json" -d '{"name":"Finance Bot", "id":"finance-bot", "description":"Specialized agent for finance questions"}'
+curl -X POST http://localhost:8083/api/knowledge/agents -H "Content-Type: application/json" -d '{"name":"Finance Bot", "id":"finance-bot", "description":"Specialized agent for finance questions"}'
 ```
 
 4. **Upload Knowledge Files** for each agent:

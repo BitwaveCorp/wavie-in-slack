@@ -2,7 +2,7 @@ package config
 
 // ServerConfig represents server-related configuration
 type ServerConfig struct {
-	Port int `envconfig:"PORT" default:"8081"`
+	Port int `envconfig:"PORT" default:"8083"`
 }
 
 // OpenAIConfig represents OpenAI API configuration
@@ -33,7 +33,7 @@ type KnowledgeConfig struct {
 // Config represents the service configuration
 type Config struct {
 	LogLevel string `envconfig:"LOG_LEVEL" default:"info"`
-	Port     int    `envconfig:"PORT" default:"8081"`
+	Port     int    `envconfig:"PORT" default:"8083"`
 
 	ClaudeAPIKey string `envconfig:"CLAUDE_API_KEY" required:"true"`
 	ClaudeModel  string `envconfig:"CLAUDE_MODEL" default:"claude-3-opus-20240229"`

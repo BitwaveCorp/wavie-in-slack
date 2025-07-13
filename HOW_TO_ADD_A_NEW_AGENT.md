@@ -22,7 +22,7 @@ First, create the agent identity in the knowledge management system:
    cd services/claude-agent-proxy-svc && go run cmd/claude-agent-proxy-svc/main.go
    ```
 
-2. **Access the Knowledge Management UI** at `http://localhost:8081/knowledge`
+2. **Access the Knowledge Management UI** at `http://localhost:8083/knowledge`
 
 3. **Create a New Agent**:
    - Click on the "Agent Management" tab
@@ -35,7 +35,7 @@ First, create the agent identity in the knowledge management system:
 
    Alternatively, you can use the API:
    ```bash
-   curl -X POST http://localhost:8081/api/knowledge/agents \
+   curl -X POST http://localhost:8083/api/knowledge/agents \
      -H "Content-Type: application/json" \
      -d '{"id":"finance-bot", "name":"Finance Bot", "description":"Specialized agent for finance questions", "tenant_id":"your-company"}'
    ```
