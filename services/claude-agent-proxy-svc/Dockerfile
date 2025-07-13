@@ -61,7 +61,12 @@ WORKDIR /root/
 COPY --from=builder /app/main .
 
 # Print environment variables at container startup (non-sensitive only)
-RUN echo '#!/bin/sh\necho "=== Container starting ==="\necho "=== Environment variables (non-sensitive) ==="\nenv | grep -v -i "key\|secret\|password\|token" || true\necho "=== Starting application ==="\nexec "$@"' > /entrypoint.sh && \
+RUN printf '#!/bin/sh\n\
+echo "=== Container starting ==="\n\
+echo "=== Environment variables (non-sensitive) ==="\n\
+env | grep -v -i "key\|secret\|password\|token" || true\n\
+echo "=== Starting application ==="\n\
+exec "$@"\n' > /entrypoint.sh && \
     chmod +x /entrypoint.sh
 
 EXPOSE 8083
