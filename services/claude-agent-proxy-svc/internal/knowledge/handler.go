@@ -156,13 +156,17 @@ func (h *Handler) handleUpload(w http.ResponseWriter, r *http.Request) {
 				// Create GCS path for the file
 				gcsFilePath := fmt.Sprintf("%s/extracted/%s", knowledgeFile.FilePath, relPath)
 				
+				// Sanitize the relative path for use in document ID
+				sanitizedPath := sanitizeDocumentID(relPath)
+				
 				h.logger.Info("Sending file to RAG service for embedding generation", 
 					"file_path", gcsFilePath,
-					"document_id", knowledgeFile.ID + "-" + relPath)
+					"document_id", knowledgeFile.ID + "-" + sanitizedPath,
+					"original_path", relPath)
 				
 				// Create request payload
 				reqBody, err := json.Marshal(map[string]string{
-					"document_id": knowledgeFile.ID + "-" + relPath,
+					"document_id": knowledgeFile.ID + "-" + sanitizedPath,
 					"file_path": gcsFilePath,
 				})
 				if err != nil {
@@ -265,13 +269,36 @@ type DeleteFileRequest struct {
 	ID string `json:"id"`
 }
 
-// DeleteFileResponse represents a response to a file deletion request
+// DeleteFileResponse represents the response for file deletion
 type DeleteFileResponse struct {
-	Success bool        `json:"success"`
-	Message string      `json:"message,omitempty"`
-	Error   string      `json:"error,omitempty"`
-	Details string      `json:"details,omitempty"`
-	RAG     interface{} `json:"rag,omitempty"`
+	Success bool                   `json:"success"`
+	Message string                 `json:"message,omitempty"`
+	Error   string                 `json:"error,omitempty"`
+	Details string                 `json:"details,omitempty"`
+	RAG     interface{}            `json:"rag,omitempty"`
+}
+
+// sanitizeDocumentID replaces characters that are not allowed in Firestore document IDs
+// Firestore document IDs cannot contain: /, ., .., *, [, ], ~, or characters that match the regex __.*__
+func sanitizeDocumentID(id string) string {
+	// Replace forward slashes with dashes
+	id = strings.ReplaceAll(id, "/", "-")
+	
+	// Replace periods with underscores
+	id = strings.ReplaceAll(id, ".", "_")
+	
+	// Replace other invalid characters
+	id = strings.ReplaceAll(id, "*", "_star_")
+	id = strings.ReplaceAll(id, "[", "_lbracket_")
+	id = strings.ReplaceAll(id, "]", "_rbracket_")
+	id = strings.ReplaceAll(id, "~", "_tilde_")
+	
+	// Handle double underscores pattern
+	if strings.Contains(id, "__") {
+		id = strings.ReplaceAll(id, "__", "_underscore_underscore_")
+	}
+	
+	return id
 }
 
 // handleDeleteFile handles deleting a knowledge file
@@ -371,8 +398,10 @@ func (h *Handler) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 			if isZipFile {
 				// Use prefix-based deletion for ZIP files
 				// This will delete all document chunks with IDs starting with the file ID prefix
-				deleteURL = fmt.Sprintf("%s/api/documents/prefix/%s-", h.ragConfig.URL, req.ID)
-				h.logger.Info("Using prefix-based deletion for ZIP file", "prefix", req.ID+"-")
+				// Note: We add a dash after the ID to match the format used during upload
+				prefix := req.ID + "-"
+				deleteURL = fmt.Sprintf("%s/api/documents/prefix/%s", h.ragConfig.URL, prefix)
+				h.logger.Info("Using prefix-based deletion for ZIP file", "prefix", prefix)
 			} else {
 				// Standard deletion for single files
 				deleteURL = fmt.Sprintf("%s/api/documents/%s", h.ragConfig.URL, req.ID)
