@@ -303,80 +303,116 @@ func sanitizeDocumentID(id string) string {
 
 // handleDeleteFile handles deleting a knowledge file
 func (h *Handler) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
+	h.logger.Info("=== DELETE HANDLER START ===: Received delete request", "remote_addr", r.RemoteAddr, "user_agent", r.UserAgent())
+	
 	if r.Method != http.MethodPost {
+		h.logger.Error("DELETE ERROR: Method not allowed", "method", r.Method, "expected", http.MethodPost)
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	h.logger.Info("DELETE STEP 1: Method validation passed")
 
 	// Create a context with timeout for the entire operation
 	// Increase timeout to 120 seconds for large file deletions
+	h.logger.Info("DELETE STEP 2: Creating context with timeout", "timeout_seconds", 120)
 	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
 	defer cancel()
+	h.logger.Info("DELETE STEP 3: Context created successfully")
 
 	// Parse request body
+	h.logger.Info("DELETE STEP 4: Parsing request body")
 	var req DeleteFileRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		h.logger.Error("Failed to parse request body", "error", err)
+		h.logger.Error("DELETE ERROR: Failed to parse request body", "error", err)
 		respondWithError(w, "Invalid request format", http.StatusBadRequest)
 		return
 	}
+	h.logger.Info("DELETE STEP 5: Request body parsed successfully", "request", fmt.Sprintf("%+v", req))
 
 	// Validate request
+	h.logger.Info("DELETE STEP 6: Validating request")
 	if req.ID == "" {
+		h.logger.Error("DELETE ERROR: Missing file ID")
 		respondWithError(w, "File ID is required", http.StatusBadRequest)
 		return
 	}
+	h.logger.Info("DELETE STEP 7: Request validation passed", "file_id", req.ID)
 
 	// Log the delete request
-	h.logger.Info("Processing file deletion request", "file_id", req.ID, "remote_addr", r.RemoteAddr)
+	h.logger.Info("DELETE STEP 8: Processing file deletion request", "file_id", req.ID, "remote_addr", r.RemoteAddr)
 
 	// Create a channel to handle timeout for the delete operation
+	h.logger.Info("DELETE STEP 9: Creating channel for delete operation")
 	deleteDone := make(chan struct {
 		err     error
 		success bool
 	}, 1)
+	h.logger.Info("DELETE STEP 10: Channel created successfully")
 
 	// Execute delete operation in a goroutine
+	h.logger.Info("DELETE STEP 11: Starting storage deletion goroutine")
 	go func() {
+		h.logger.Info("DELETE STEP 12: Inside storage deletion goroutine", "file_id", req.ID)
+		h.logger.Info("DELETE STEP 13: Calling storage backend DeleteKnowledgeFile", "file_id", req.ID, "backend_type", h.storageBackend.GetStorageType())
+		start := time.Now()
 		err := h.storageBackend.DeleteKnowledgeFile(req.ID)
+		elapsed := time.Since(start)
+		if err != nil {
+			h.logger.Error("DELETE ERROR: Storage backend delete failed", "error", err, "file_id", req.ID, "duration_ms", elapsed.Milliseconds())
+		} else {
+			h.logger.Info("DELETE STEP 14: Storage backend delete completed", "file_id", req.ID, "duration_ms", elapsed.Milliseconds())
+		}
+		h.logger.Info("DELETE STEP 15: Sending result to channel", "file_id", req.ID, "success", err == nil)
 		deleteDone <- struct {
 			err     error
 			success bool
 		}{err, err == nil}
+		h.logger.Info("DELETE STEP 16: Result sent to channel", "file_id", req.ID)
 	}()
 
 	// Wait for either completion or timeout
+	h.logger.Info("DELETE STEP 17: Waiting for deletion result or timeout", "file_id", req.ID)
 	select {
 	case result := <-deleteDone:
+		h.logger.Info("DELETE STEP 18: Received result from channel", "file_id", req.ID, "success", result.success)
 		if result.err != nil {
-			h.logger.Error("Failed to delete knowledge file", "error", result.err, "file_id", req.ID)
+			h.logger.Error("DELETE ERROR: Failed to delete knowledge file", "error", result.err, "file_id", req.ID, "error_type", fmt.Sprintf("%T", result.err))
 
 			// Determine appropriate status code based on error
 			statusCode := http.StatusInternalServerError
 			errorMessage := "Failed to delete file"
+			h.logger.Info("DELETE STEP 19: Determining error type", "file_id", req.ID, "error_message", result.err.Error())
 
 			if strings.Contains(result.err.Error(), "not found") {
+				h.logger.Info("DELETE ERROR: File not found", "file_id", req.ID)
 				statusCode = http.StatusNotFound
 				errorMessage = "File not found"
 			} else if strings.Contains(result.err.Error(), "deadline exceeded") {
+				h.logger.Info("DELETE ERROR: Operation timed out", "file_id", req.ID)
 				statusCode = http.StatusGatewayTimeout
 				errorMessage = "Operation timed out"
 			}
 
+			h.logger.Info("DELETE STEP 20: Sending error response", "file_id", req.ID, "status_code", statusCode, "error_message", errorMessage)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(statusCode)
-			json.NewEncoder(w).Encode(DeleteFileResponse{
+			response := DeleteFileResponse{
 				Success: false,
 				Error:   errorMessage,
 				Details: result.err.Error(),
-			})
+			}
+			respBytes, _ := json.Marshal(response)
+			h.logger.Info("DELETE STEP 21: Error response details", "file_id", req.ID, "response", string(respBytes))
+			json.NewEncoder(w).Encode(response)
+			h.logger.Info("DELETE ERROR: Handler completed with error", "file_id", req.ID)
 			return
 		}
 
 		// Success case
-		h.logger.Info("Successfully deleted knowledge file", "file_id", req.ID)
+		h.logger.Info("DELETE STEP 22: Successfully deleted knowledge file from storage", "file_id", req.ID)
 
 		// Delete from RAG service if enabled
+		h.logger.Info("DELETE STEP 23: Preparing RAG service deletion", "file_id", req.ID)
 		ragResults := struct {
 			Enabled      bool   `json:"enabled"`
 			Attempted    int    `json:"attempted"`
@@ -386,12 +422,19 @@ func (h *Handler) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 		}{
 			Enabled: h.ragConfig != nil && h.ragConfig.Enabled && h.ragConfig.URL != "",
 		}
+		
+		h.logger.Info("DELETE STEP 24: RAG service configuration", 
+			"file_id", req.ID, 
+			"rag_enabled", ragResults.Enabled, 
+			"rag_config_nil", h.ragConfig == nil,
+			"rag_url", h.ragConfig != nil && h.ragConfig.URL != "" && h.ragConfig.Enabled)
 
 		if ragResults.Enabled {
-			h.logger.Info("Deleting document embeddings from RAG service", "file_id", req.ID)
+			h.logger.Info("DELETE STEP 25: Deleting document embeddings from RAG service", "file_id", req.ID)
 
 			// Check if this is a ZIP file by looking at the file extension
 			isZipFile := strings.HasSuffix(strings.ToLower(req.ID), ".zip")
+			h.logger.Info("DELETE STEP 26: File type check", "file_id", req.ID, "is_zip_file", isZipFile)
 
 			// For ZIP files, use the prefix-based deletion to delete all extracted files
 			// Use the standard document deletion endpoint for both single files and ZIP files
@@ -400,9 +443,16 @@ func (h *Handler) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 			var deleteURL string
 
 			// Use sanitized document ID for deletion to match the sanitized IDs used during upload
+			h.logger.Info("DELETE STEP 27: Sanitizing document ID", "file_id", req.ID)
 			sanitizedID := sanitizeDocumentID(req.ID)
+			h.logger.Info("DELETE STEP 28: Document ID sanitized", "file_id", req.ID, "sanitized_id", sanitizedID, "difference", req.ID != sanitizedID)
+			
 			deleteURL = fmt.Sprintf("%s/api/documents/%s", h.ragConfig.URL, sanitizedID)
-			h.logger.Info("Using standard deletion for file", "file_id", req.ID, "sanitized_id", sanitizedID)
+			h.logger.Info("DELETE STEP 29: Using standard deletion for file", 
+				"file_id", req.ID, 
+				"sanitized_id", sanitizedID, 
+				"delete_url", deleteURL, 
+				"rag_base_url", h.ragConfig.URL)
 
 			ragResults.Attempted++
 
@@ -410,65 +460,96 @@ func (h *Handler) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 
 			// Start asynchronous deletion for RAG service
 			// This will allow the HTTP request to return quickly while the deletion continues in the background
+			h.logger.Info("DELETE STEP 30: Starting asynchronous background deletion", "file_id", req.ID)
 			go func(fileID, deleteURL string) {
+				h.logger.Info("DELETE STEP 31: Inside background deletion goroutine", "file_id", fileID, "delete_url", deleteURL)
+				
 				// Create a new context with a longer timeout for the background process
+				h.logger.Info("DELETE STEP 32: Creating background context with extended timeout", "file_id", fileID, "timeout_minutes", 10)
 				bgCtx, bgCancel := context.WithTimeout(context.Background(), 10*time.Minute)
 				defer bgCancel()
+				h.logger.Info("DELETE STEP 33: Background context created successfully", "file_id", fileID)
 
 				// Create HTTP client with increased timeout for RAG service calls
+				h.logger.Info("DELETE STEP 34: Creating HTTP client with extended timeout", "file_id", fileID, "timeout_minutes", 5)
 				bgClient := &http.Client{
 					Timeout: 5 * time.Minute, // 5 minutes timeout for background deletion
 				}
+				h.logger.Info("DELETE STEP 35: HTTP client created successfully", "file_id", fileID)
 
 				// Create request with the background context
+				h.logger.Info("DELETE STEP 36: Creating DELETE request to RAG service", "file_id", fileID, "url", deleteURL)
 				request, err := http.NewRequestWithContext(bgCtx, "DELETE", deleteURL, nil)
 				if err != nil {
-					h.logger.Error("Background deletion: Failed to create request to RAG service", "error", err, "file_id", fileID)
+					h.logger.Error("DELETE ERROR: Background deletion - Failed to create request to RAG service", "error", err, "file_id", fileID, "error_type", fmt.Sprintf("%T", err))
 					return
 				}
+				h.logger.Info("DELETE STEP 37: DELETE request created successfully", "file_id", fileID)
 
 				// Execute the request
-				h.logger.Info("Background deletion: Starting RAG service deletion", "file_id", fileID)
+				h.logger.Info("DELETE STEP 38: Executing DELETE request to RAG service", "file_id", fileID, "url", deleteURL)
+				start := time.Now()
 				resp, err := bgClient.Do(request)
+				elapsed := time.Since(start)
+				h.logger.Info("DELETE STEP 39: RAG service DELETE request completed", "file_id", fileID, "duration_ms", elapsed.Milliseconds())
+				
 				if err != nil {
-					h.logger.Error("Background deletion: Failed to delete from RAG service", "error", err, "file_id", fileID)
+					h.logger.Error("DELETE ERROR: Background deletion - Failed to delete from RAG service", 
+						"error", err, 
+						"error_type", fmt.Sprintf("%T", err),
+						"file_id", fileID, 
+						"timeout_exceeded", strings.Contains(err.Error(), "context deadline exceeded") || strings.Contains(err.Error(), "timeout"),
+						"duration_ms", elapsed.Milliseconds())
 					return
 				}
 				defer resp.Body.Close()
+				h.logger.Info("DELETE STEP 40: Checking RAG service response", "file_id", fileID, "status_code", resp.StatusCode, "status", resp.Status)
 
 				if resp.StatusCode != http.StatusOK {
-					respBody, _ := io.ReadAll(resp.Body)
-					h.logger.Error("Background deletion: RAG service returned error",
+					respBody, readErr := io.ReadAll(resp.Body)
+					if readErr != nil {
+						h.logger.Error("DELETE ERROR: Failed to read error response body", "error", readErr, "file_id", fileID)
+					}
+					h.logger.Error("DELETE ERROR: Background deletion - RAG service returned error",
 						"status", resp.Status,
+						"status_code", resp.StatusCode,
 						"response", string(respBody),
-						"file_id", fileID)
+						"file_id", fileID,
+						"read_error", readErr != nil)
 				} else {
-					h.logger.Info("Background deletion: Successfully deleted document embeddings", "file_id", fileID)
+					respBody, _ := io.ReadAll(resp.Body)
+					h.logger.Info("DELETE SUCCESS: Background deletion completed successfully", 
+						"file_id", fileID, 
+						"response", string(respBody),
+						"duration_ms", elapsed.Milliseconds())
 				}
 			}(req.ID, deleteURL)
 
 			// Mark as attempted but not yet completed
+			h.logger.Info("DELETE STEP 41: Updating RAG results", "file_id", req.ID)
 			ragResults.Attempted++
 
 			// Set a message indicating that deletion is in progress
 			ragResults.ErrorMessage = "Deletion started and will continue in the background"
+			h.logger.Info("DELETE STEP 42: Set background deletion message", "file_id", req.ID, "message", ragResults.ErrorMessage)
 
 			// Mark as successful since we've started the background deletion process
 			ragResults.Successful++
+			h.logger.Info("DELETE STEP 43: Marked background deletion as successful", "file_id", req.ID, "successful_count", ragResults.Successful)
 
 			// Log that we've started the background deletion
 			deleteType := "standard"
 			if isZipFile {
 				deleteType = "prefix-based"
 			}
-			h.logger.Info("Started background deletion of document embeddings",
+			h.logger.Info("DELETE STEP 44: Started background deletion of document embeddings",
 				"file_id", req.ID,
 				"sanitized_id", sanitizedID,
 				"delete_type", deleteType,
 				"delete_url", deleteURL)
 
 			// Add detailed log about the asynchronous process
-			h.logger.Info("Asynchronous deletion details",
+			h.logger.Info("DELETE STEP 45: Asynchronous deletion details",
 				"file_id", req.ID,
 				"timeout", "10 minutes for background context",
 				"http_timeout", "5 minutes for HTTP client",
@@ -477,26 +558,65 @@ func (h *Handler) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Return a 202 Accepted status with informative message about background deletion
+		h.logger.Info("DELETE STEP 46: Preparing success response with background deletion info", "file_id", req.ID)
 		responseData := DeleteFileResponse{
 			Success: true,
 			Message: "File successfully deleted from storage",
 			Details: "RAG service deletion has been started and will continue in the background. This may take several minutes for large files with many chunks.",
 			RAG:     ragResults,
 		}
+		
+		// Log response details
+		respBytes, _ := json.Marshal(responseData)
+		h.logger.Info("DELETE STEP 47: Success response details", "file_id", req.ID, "response", string(respBytes))
+		
+		// Set response headers and write response
+		h.logger.Info("DELETE STEP 48: Setting response headers", "file_id", req.ID, "status", http.StatusAccepted)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
-		json.NewEncoder(w).Encode(responseData)
+		
+		// Encode and send response
+		h.logger.Info("DELETE STEP 49: Encoding and sending response", "file_id", req.ID)
+		err := json.NewEncoder(w).Encode(responseData)
+		if err != nil {
+			h.logger.Error("DELETE ERROR: Failed to encode response", "error", err, "file_id", req.ID)
+		}
+		
+		h.logger.Info("DELETE STEP 50: Handler completed successfully", "file_id", req.ID)
 
 	case <-ctx.Done():
 		// Context timeout or cancellation
-		h.logger.Error("Delete operation timed out", "file_id", req.ID)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusGatewayTimeout)
-		json.NewEncoder(w).Encode(DeleteFileResponse{
+		h.logger.Error("DELETE ERROR: Context timeout or cancellation", 
+			"file_id", req.ID, 
+			"error", ctx.Err(), 
+			"error_type", fmt.Sprintf("%T", ctx.Err()),
+			"timeout_seconds", 120)
+		
+		// Prepare timeout response
+		h.logger.Info("DELETE STEP 51: Preparing timeout response", "file_id", req.ID)
+		timeoutResponse := DeleteFileResponse{
 			Success: false,
 			Error:   "Operation timed out",
 			Details: "The delete operation took too long and timed out",
-		})
+		}
+		
+		// Log response details
+		respBytes, _ := json.Marshal(timeoutResponse)
+		h.logger.Info("DELETE STEP 52: Timeout response details", "file_id", req.ID, "response", string(respBytes))
+		
+		// Set response headers
+		h.logger.Info("DELETE STEP 53: Setting timeout response headers", "file_id", req.ID, "status", http.StatusGatewayTimeout)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusGatewayTimeout)
+		
+		// Encode and send response
+		h.logger.Info("DELETE STEP 54: Encoding and sending timeout response", "file_id", req.ID)
+		err := json.NewEncoder(w).Encode(timeoutResponse)
+		if err != nil {
+			h.logger.Error("DELETE ERROR: Failed to encode timeout response", "error", err, "file_id", req.ID)
+		}
+		
+		h.logger.Info("DELETE STEP 55: Handler completed with timeout", "file_id", req.ID)
 	}
 }
 
