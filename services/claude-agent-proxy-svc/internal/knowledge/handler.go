@@ -362,12 +362,25 @@ func (h *Handler) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 		if ragResults.Enabled {
 			h.logger.Info("Deleting document embeddings from RAG service", "file_id", req.ID)
 			
-			// For simplicity, we'll delete the main document ID which is the same as the file ID
-			// This works if the document was uploaded as a single file
+			// Check if this is a ZIP file by looking at the file extension
+			isZipFile := strings.HasSuffix(strings.ToLower(req.ID), ".zip")
+			
+			// For ZIP files, use the prefix-based deletion to delete all extracted files
+			// For non-ZIP files, use the standard document deletion endpoint
+			var deleteURL string
+			if isZipFile {
+				// Use prefix-based deletion for ZIP files
+				// This will delete all document chunks with IDs starting with the file ID prefix
+				deleteURL = fmt.Sprintf("%s/api/documents/prefix/%s-", h.ragConfig.URL, req.ID)
+				h.logger.Info("Using prefix-based deletion for ZIP file", "prefix", req.ID+"-")
+			} else {
+				// Standard deletion for single files
+				deleteURL = fmt.Sprintf("%s/api/documents/%s", h.ragConfig.URL, req.ID)
+			}
+			
 			ragResults.Attempted++
 			
 			// Send delete request to RAG service
-			deleteURL := fmt.Sprintf("%s/api/documents/%s", h.ragConfig.URL, req.ID)
 			deleteReq, err := http.NewRequest("DELETE", deleteURL, nil)
 			if err != nil {
 				h.logger.Error("Failed to create delete request for RAG service", "error", err)
@@ -391,17 +404,17 @@ func (h *Handler) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 						ragResults.Failed++
 						ragResults.ErrorMessage = fmt.Sprintf("RAG service error: %s - %s", deleteResp.Status, string(respBody))
 					} else {
-						h.logger.Info("Successfully deleted document embeddings from RAG service", "document_id", req.ID)
+						deleteType := "standard"
+						if isZipFile {
+							deleteType = "prefix-based"
+						}
+						h.logger.Info("Successfully deleted document embeddings from RAG service", 
+							"document_id", req.ID, 
+							"delete_type", deleteType)
 						ragResults.Successful++
 					}
 				}
 			}
-			
-			// For ZIP files, we need to handle multiple markdown files that were extracted
-			// Each markdown file would have a document ID of the form: fileID-relativePath
-			// This is more complex and would require knowing which markdown files were in the ZIP
-			// For a complete solution, we would need to store this information when uploading
-			// or query the RAG service for all documents with IDs starting with fileID-
 		}
 		
 		w.Header().Set("Content-Type", "application/json")

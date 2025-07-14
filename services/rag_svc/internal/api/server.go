@@ -89,13 +89,20 @@ func (s *Server) Close() error {
 
 // setupRoutes sets up the API routes
 func (s *Server) setupRoutes() {
-	// API routes
-	s.router.HandleFunc("/api/documents", s.handleUploadDocument).Methods("POST")
-	s.router.HandleFunc("/api/documents/{documentId}", s.handleDeleteDocument).Methods("DELETE")
-	s.router.HandleFunc("/api/ask", s.handleAskQuestion).Methods("POST")
-
 	// Health check
 	s.router.HandleFunc("/health", s.handleHealthCheck).Methods("GET")
+
+	// Document upload
+	s.router.HandleFunc("/api/documents", s.handleUploadDocument).Methods("POST")
+
+	// Document deletion
+	s.router.HandleFunc("/api/documents/{documentId}", s.handleDeleteDocument).Methods("DELETE")
+
+	// Document deletion by prefix
+	s.router.HandleFunc("/api/documents/prefix/{prefix}", s.handleDeleteDocumentByPrefix).Methods("DELETE")
+
+	// Question answering
+	s.router.HandleFunc("/api/ask", s.handleAskQuestion).Methods("POST")
 }
 
 // Start starts the server
@@ -195,6 +202,41 @@ func (s *Server) handleDeleteDocument(w http.ResponseWriter, r *http.Request) {
 		Status:     "success",
 		Message:    "Document embeddings deleted successfully",
 		DocumentID: documentID,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(response)
+}
+
+// handleDeleteDocumentByPrefix handles deletion of all documents with IDs starting with the given prefix
+func (s *Server) handleDeleteDocumentByPrefix(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	// Get prefix from URL
+	vars := mux.Vars(r)
+	prefix := vars["prefix"]
+
+	if prefix == "" {
+		http.Error(w, "Missing prefix", http.StatusBadRequest)
+		return
+	}
+
+	// Log the request
+	log.Printf("Deleting all document embeddings with prefix: %s", prefix)
+
+	// Delete document embeddings by prefix
+	err := s.vectorStore.DeleteDocumentEmbeddingsByPrefix(ctx, prefix)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to delete document embeddings by prefix: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Return success
+	response := models.DeleteDocumentResponse{
+		Status:     "success",
+		Message:    fmt.Sprintf("Document embeddings with prefix '%s' deleted successfully", prefix),
+		DocumentID: prefix, // Using the prefix as the document ID in the response
 	}
 
 	w.Header().Set("Content-Type", "application/json")

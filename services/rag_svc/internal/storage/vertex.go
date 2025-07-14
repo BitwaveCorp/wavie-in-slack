@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
+	"log"
 	"net/http"
 	"time"
 
@@ -337,6 +338,117 @@ func (s *VectorStore) DeleteDocumentEmbeddings(ctx context.Context, documentID s
 		_, err := batch.Commit(ctx)
 		if err != nil {
 			return fmt.Errorf("failed to delete chunks from Firestore: %v", err)
+		}
+	}
+	
+	return nil
+}
+
+// DeleteDocumentEmbeddingsByPrefix deletes all document embeddings with IDs starting with the given prefix
+func (s *VectorStore) DeleteDocumentEmbeddingsByPrefix(ctx context.Context, prefix string) error {
+	// 1. Get all chunk IDs for documents with IDs starting with the prefix
+	// Use a range query: >= prefix and < prefix + \uf8ff (which is higher than any UTF-8 character)
+	query := s.firestoreClient.Collection("document_chunks").Where("document_id", ">", prefix).Where("document_id", "<", prefix+"\uf8ff")
+	iter := query.Documents(ctx)
+	defer iter.Stop()
+	
+	// Extract chunk IDs and collect document references
+	var chunkIDs []string
+	var docRefs []*firestore.DocumentRef
+	var documentIDs []string
+	
+	for {
+		doc, err := iter.Next()
+		if err == iterator.Done {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("error iterating document chunks: %v", err)
+		}
+		
+		chunkIDs = append(chunkIDs, doc.Ref.ID)
+		docRefs = append(docRefs, doc.Ref)
+		
+		// Extract document ID for logging
+		var data map[string]interface{}
+		if err := doc.DataTo(&data); err == nil {
+			if docID, ok := data["document_id"].(string); ok {
+				documentIDs = append(documentIDs, docID)
+			}
+		}
+	}
+	
+	// Log the number of documents found
+	log.Printf("Found %d chunks with document IDs starting with prefix '%s'", len(chunkIDs), prefix)
+	if len(documentIDs) > 0 {
+		log.Printf("Document IDs: %v", documentIDs)
+	}
+	
+	// 2. Delete from Vertex AI Vector Search
+	if len(chunkIDs) > 0 {
+		// Create the request URL for RemoveDatapoints
+		url := fmt.Sprintf("https://%s-aiplatform.googleapis.com/v1/%s:removeDatapoints", 
+			s.location, s.indexPath)
+		
+		// Create the request body
+		reqBody := map[string]interface{}{
+			"datapoint_ids": chunkIDs,
+		}
+		
+		// Marshal the request body to JSON
+		jsonData, err := json.Marshal(reqBody)
+		if err != nil {
+			return fmt.Errorf("failed to marshal request body: %v", err)
+		}
+		
+		// Create the HTTP request
+		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
+		if err != nil {
+			return fmt.Errorf("failed to create HTTP request: %v", err)
+		}
+		
+		// Set headers
+		req.Header.Set("Content-Type", "application/json")
+		
+		// Execute the request
+		response, err := s.httpClient.Do(req)
+		if err != nil {
+			return fmt.Errorf("failed to execute HTTP request: %v", err)
+		}
+		defer response.Body.Close()
+		
+		// Read the response body
+		respBody, err := ioutil.ReadAll(response.Body)
+		if err != nil {
+			return fmt.Errorf("failed to read response body: %v", err)
+		}
+		
+		// Check for non-200 status code
+		if response.StatusCode != http.StatusOK {
+			return fmt.Errorf("API request failed with status code %d: %s", response.StatusCode, string(respBody))
+		}
+	}
+	
+	// 3. Delete from Firestore
+	if len(docRefs) > 0 {
+		// Use batched writes for better performance
+		// Firestore has a limit of 500 operations per batch
+		const batchSize = 500
+		for i := 0; i < len(docRefs); i += batchSize {
+			end := i + batchSize
+			if end > len(docRefs) {
+				end = len(docRefs)
+			}
+			
+			batch := s.firestoreClient.Batch()
+			for _, ref := range docRefs[i:end] {
+				batch.Delete(ref)
+			}
+			
+			_, err := batch.Commit(ctx)
+			if err != nil {
+				return fmt.Errorf("failed to delete chunks from Firestore (batch %d-%d): %v", i, end, err)
+			}
 		}
 	}
 	
