@@ -265,12 +265,13 @@ type DeleteFileRequest struct {
 	ID string `json:"id"`
 }
 
-// DeleteFileResponse represents a response to a delete file request
+// DeleteFileResponse represents a response to a file deletion request
 type DeleteFileResponse struct {
-	Success bool   `json:"success"`
-	Error   string `json:"error,omitempty"`
-	Details string `json:"details,omitempty"`
-	Message string `json:"message,omitempty"`
+	Success bool        `json:"success"`
+	Message string      `json:"message,omitempty"`
+	Error   string      `json:"error,omitempty"`
+	Details string      `json:"details,omitempty"`
+	RAG     interface{} `json:"rag,omitempty"`
 }
 
 // handleDeleteFile handles deleting a knowledge file
@@ -346,10 +347,68 @@ func (h *Handler) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 		
 		// Success case
 		h.logger.Info("Successfully deleted knowledge file", "file_id", req.ID)
+		
+		// Delete from RAG service if enabled
+		ragResults := struct {
+			Enabled      bool   `json:"enabled"`
+			Attempted    int    `json:"attempted"`
+			Successful   int    `json:"successful"`
+			Failed       int    `json:"failed"`
+			ErrorMessage string `json:"error_message,omitempty"`
+		}{
+			Enabled: h.ragConfig != nil && h.ragConfig.Enabled && h.ragConfig.URL != "",
+		}
+		
+		if ragResults.Enabled {
+			h.logger.Info("Deleting document embeddings from RAG service", "file_id", req.ID)
+			
+			// For simplicity, we'll delete the main document ID which is the same as the file ID
+			// This works if the document was uploaded as a single file
+			ragResults.Attempted++
+			
+			// Send delete request to RAG service
+			deleteURL := fmt.Sprintf("%s/api/documents/%s", h.ragConfig.URL, req.ID)
+			deleteReq, err := http.NewRequest("DELETE", deleteURL, nil)
+			if err != nil {
+				h.logger.Error("Failed to create delete request for RAG service", "error", err)
+				ragResults.Failed++
+				ragResults.ErrorMessage = "Failed to create delete request: " + err.Error()
+			} else {
+				// Execute the request
+				deleteResp, err := http.DefaultClient.Do(deleteReq)
+				if err != nil {
+					h.logger.Error("Failed to send delete request to RAG service", "error", err)
+					ragResults.Failed++
+					ragResults.ErrorMessage = "Failed to send delete request: " + err.Error()
+				} else {
+					defer deleteResp.Body.Close()
+					
+					if deleteResp.StatusCode != http.StatusOK {
+						respBody, _ := io.ReadAll(deleteResp.Body)
+						h.logger.Error("RAG service returned error for delete", 
+							"status", deleteResp.Status,
+							"response", string(respBody))
+						ragResults.Failed++
+						ragResults.ErrorMessage = fmt.Sprintf("RAG service error: %s - %s", deleteResp.Status, string(respBody))
+					} else {
+						h.logger.Info("Successfully deleted document embeddings from RAG service", "document_id", req.ID)
+						ragResults.Successful++
+					}
+				}
+			}
+			
+			// For ZIP files, we need to handle multiple markdown files that were extracted
+			// Each markdown file would have a document ID of the form: fileID-relativePath
+			// This is more complex and would require knowing which markdown files were in the ZIP
+			// For a complete solution, we would need to store this information when uploading
+			// or query the RAG service for all documents with IDs starting with fileID-
+		}
+		
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(DeleteFileResponse{
 			Success: true,
 			Message: "File successfully deleted",
+			RAG:     ragResults,
 		})
 		
 	case <-ctx.Done():
@@ -910,7 +969,24 @@ func (h *Handler) handleUI(w http.ResponseWriter, r *http.Request) {
                     })
                     .then(data => {
                         if (data.success) {
-                            alert('File deleted successfully!');
+                            let message = 'File deleted successfully!';
+                            
+                            // Add RAG deletion results if available
+                            if (data.rag && data.rag.enabled) {
+                                if (data.rag.successful > 0) {
+                                    message += '\n\nRAG service: ' + data.rag.successful + ' of ' + 
+                                        data.rag.attempted + ' document embeddings deleted successfully.';
+                                }
+                                if (data.rag.failed > 0) {
+                                    message += '\n\nRAG service: Failed to delete ' + data.rag.failed + 
+                                        ' document embeddings.';
+                                    if (data.rag.error_message) {
+                                        message += '\nError: ' + data.rag.error_message;
+                                    }
+                                }
+                            }
+                            
+                            alert(message);
                             loadFiles();
                         } else {
                             throw new Error(data.error || 'Unknown error');
