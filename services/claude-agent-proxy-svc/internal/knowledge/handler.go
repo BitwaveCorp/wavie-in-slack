@@ -408,11 +408,7 @@ func (h *Handler) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 			
 			ragResults.Attempted++
 			
-			// Create HTTP client with increased timeout for RAG service calls
-			ragClient := &http.Client{
-				Timeout: 180 * time.Second, // Increase timeout to 3 minutes for large deletions
-			}
-			// Match the timeout with our context
+			// We'll use a longer timeout in the background goroutine
 
 			// Start asynchronous deletion for RAG service
 			// This will allow the HTTP request to return quickly while the deletion continues in the background
