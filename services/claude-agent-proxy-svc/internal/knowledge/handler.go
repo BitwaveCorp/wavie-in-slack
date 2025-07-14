@@ -4,12 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"log/slog"
-	"net"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -97,7 +95,7 @@ func (h *Handler) handleUpload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to add knowledge file: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	
+
 	// Send to RAG service for embedding generation if enabled
 	ragResults := struct {
 		Enabled      bool   `json:"enabled"`
@@ -113,7 +111,7 @@ func (h *Handler) handleUpload(w http.ResponseWriter, r *http.Request) {
 		// Get the extracted directory path
 		extractedPath := filepath.Join(knowledgeFile.FilePath, "extracted")
 		h.logger.Info("Processing extracted directory for RAG service", "path", extractedPath)
-		
+
 		// For GCP storage, ensure the extracted directory is cached locally
 		var localExtractedPath string
 		if h.storageBackend.GetStorageType() == "gcp" {
@@ -129,7 +127,7 @@ func (h *Handler) handleUpload(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		
+
 		// If we have a local path, process the markdown files
 		if localExtractedPath != "" {
 			// Walk through all files in the extracted directory
@@ -137,52 +135,52 @@ func (h *Handler) handleUpload(w http.ResponseWriter, r *http.Request) {
 				if err != nil {
 					return nil // Skip errors and continue
 				}
-				
+
 				// Skip directories
 				if d.IsDir() {
 					return nil
 				}
-				
+
 				// Only process markdown files
 				if !strings.HasSuffix(strings.ToLower(path), ".md") {
 					return nil
 				}
-				
+
 				// Get relative path for the file
 				relPath, err := filepath.Rel(localExtractedPath, path)
 				if err != nil {
 					h.logger.Error("Failed to get relative path", "path", path, "error", err)
 					return nil
 				}
-				
+
 				// Create GCS path for the file
 				gcsFilePath := fmt.Sprintf("%s/extracted/%s", knowledgeFile.FilePath, relPath)
-				
+
 				// Sanitize the relative path for use in document ID
 				sanitizedPath := sanitizeDocumentID(relPath)
-				
-				h.logger.Info("Sending file to RAG service for embedding generation", 
+
+				h.logger.Info("Sending file to RAG service for embedding generation",
 					"file_path", gcsFilePath,
-					"document_id", knowledgeFile.ID + "-" + sanitizedPath,
+					"document_id", knowledgeFile.ID+"-"+sanitizedPath,
 					"original_path", relPath)
-				
+
 				// Create request payload
 				reqBody, err := json.Marshal(map[string]string{
 					"document_id": knowledgeFile.ID + "-" + sanitizedPath,
-					"file_path": gcsFilePath,
+					"file_path":   gcsFilePath,
 				})
 				if err != nil {
 					h.logger.Error("Failed to marshal RAG request", "error", err)
 					ragResults.Failed++
 					return nil
 				}
-				
+
 				// Increment processed count
 				ragResults.Processed++
-				
+
 				// Send to RAG service
 				resp, err := http.Post(
-					h.ragConfig.URL + "/api/documents",
+					h.ragConfig.URL+"/api/documents",
 					"application/json",
 					bytes.NewBuffer(reqBody),
 				)
@@ -192,11 +190,11 @@ func (h *Handler) handleUpload(w http.ResponseWriter, r *http.Request) {
 					return nil
 				}
 				defer resp.Body.Close()
-				
+
 				// Check response
 				if resp.StatusCode != http.StatusOK {
 					respBody, _ := io.ReadAll(resp.Body)
-					h.logger.Error("RAG service returned error", 
+					h.logger.Error("RAG service returned error",
 						"status", resp.Status,
 						"response", string(respBody))
 					ragResults.Failed++
@@ -205,7 +203,7 @@ func (h *Handler) handleUpload(w http.ResponseWriter, r *http.Request) {
 					}
 					return nil
 				}
-				
+
 				h.logger.Info("Successfully sent file to RAG service", "file_path", gcsFilePath)
 				ragResults.Successful++
 				return nil
@@ -273,11 +271,11 @@ type DeleteFileRequest struct {
 
 // DeleteFileResponse represents the response for file deletion
 type DeleteFileResponse struct {
-	Success bool                   `json:"success"`
-	Message string                 `json:"message,omitempty"`
-	Error   string                 `json:"error,omitempty"`
-	Details string                 `json:"details,omitempty"`
-	RAG     interface{}            `json:"rag,omitempty"`
+	Success bool        `json:"success"`
+	Message string      `json:"message,omitempty"`
+	Error   string      `json:"error,omitempty"`
+	Details string      `json:"details,omitempty"`
+	RAG     interface{} `json:"rag,omitempty"`
 }
 
 // sanitizeDocumentID replaces characters that are not allowed in Firestore document IDs
@@ -285,21 +283,21 @@ type DeleteFileResponse struct {
 func sanitizeDocumentID(id string) string {
 	// Replace forward slashes with dashes
 	id = strings.ReplaceAll(id, "/", "-")
-	
+
 	// Replace periods with underscores
 	id = strings.ReplaceAll(id, ".", "_")
-	
+
 	// Replace other invalid characters
 	id = strings.ReplaceAll(id, "*", "_star_")
 	id = strings.ReplaceAll(id, "[", "_lbracket_")
 	id = strings.ReplaceAll(id, "]", "_rbracket_")
 	id = strings.ReplaceAll(id, "~", "_tilde_")
-	
+
 	// Handle double underscores pattern
 	if strings.Contains(id, "__") {
 		id = strings.ReplaceAll(id, "__", "_underscore_underscore_")
 	}
-	
+
 	return id
 }
 
@@ -333,8 +331,8 @@ func (h *Handler) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 	h.logger.Info("Processing file deletion request", "file_id", req.ID, "remote_addr", r.RemoteAddr)
 
 	// Create a channel to handle timeout for the delete operation
-	deleteDone := make(chan struct{
-		err error
+	deleteDone := make(chan struct {
+		err     error
 		success bool
 	}, 1)
 
@@ -342,7 +340,7 @@ func (h *Handler) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		err := h.storageBackend.DeleteKnowledgeFile(req.ID)
 		deleteDone <- struct {
-			err error
+			err     error
 			success bool
 		}{err, err == nil}
 	}()
@@ -352,11 +350,11 @@ func (h *Handler) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 	case result := <-deleteDone:
 		if result.err != nil {
 			h.logger.Error("Failed to delete knowledge file", "error", result.err, "file_id", req.ID)
-			
+
 			// Determine appropriate status code based on error
 			statusCode := http.StatusInternalServerError
 			errorMessage := "Failed to delete file"
-			
+
 			if strings.Contains(result.err.Error(), "not found") {
 				statusCode = http.StatusNotFound
 				errorMessage = "File not found"
@@ -364,7 +362,7 @@ func (h *Handler) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 				statusCode = http.StatusGatewayTimeout
 				errorMessage = "Operation timed out"
 			}
-			
+
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(statusCode)
 			json.NewEncoder(w).Encode(DeleteFileResponse{
@@ -374,10 +372,10 @@ func (h *Handler) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
-		
+
 		// Success case
 		h.logger.Info("Successfully deleted knowledge file", "file_id", req.ID)
-		
+
 		// Delete from RAG service if enabled
 		ragResults := struct {
 			Enabled      bool   `json:"enabled"`
@@ -388,26 +386,26 @@ func (h *Handler) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 		}{
 			Enabled: h.ragConfig != nil && h.ragConfig.Enabled && h.ragConfig.URL != "",
 		}
-		
+
 		if ragResults.Enabled {
 			h.logger.Info("Deleting document embeddings from RAG service", "file_id", req.ID)
-			
+
 			// Check if this is a ZIP file by looking at the file extension
 			isZipFile := strings.HasSuffix(strings.ToLower(req.ID), ".zip")
-			
+
 			// For ZIP files, use the prefix-based deletion to delete all extracted files
 			// Use the standard document deletion endpoint for both single files and ZIP files
 			// The document ID in RAG service is the same as the file ID in storage
 			// This should delete all chunks associated with this document ID
 			var deleteURL string
-			
+
 			// Use sanitized document ID for deletion to match the sanitized IDs used during upload
 			sanitizedID := sanitizeDocumentID(req.ID)
 			deleteURL = fmt.Sprintf("%s/api/documents/%s", h.ragConfig.URL, sanitizedID)
 			h.logger.Info("Using standard deletion for file", "file_id", req.ID, "sanitized_id", sanitizedID)
-			
+
 			ragResults.Attempted++
-			
+
 			// We'll use a longer timeout in the background goroutine
 
 			// Start asynchronous deletion for RAG service
@@ -416,19 +414,19 @@ func (h *Handler) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 				// Create a new context with a longer timeout for the background process
 				bgCtx, bgCancel := context.WithTimeout(context.Background(), 10*time.Minute)
 				defer bgCancel()
-				
+
 				// Create HTTP client with increased timeout for RAG service calls
 				bgClient := &http.Client{
 					Timeout: 5 * time.Minute, // 5 minutes timeout for background deletion
 				}
-				
+
 				// Create request with the background context
 				request, err := http.NewRequestWithContext(bgCtx, "DELETE", deleteURL, nil)
 				if err != nil {
 					h.logger.Error("Background deletion: Failed to create request to RAG service", "error", err, "file_id", fileID)
 					return
 				}
-				
+
 				// Execute the request
 				h.logger.Info("Background deletion: Starting RAG service deletion", "file_id", fileID)
 				resp, err := bgClient.Do(request)
@@ -437,10 +435,10 @@ func (h *Handler) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 				defer resp.Body.Close()
-				
+
 				if resp.StatusCode != http.StatusOK {
 					respBody, _ := io.ReadAll(resp.Body)
-					h.logger.Error("Background deletion: RAG service returned error", 
+					h.logger.Error("Background deletion: RAG service returned error",
 						"status", resp.Status,
 						"response", string(respBody),
 						"file_id", fileID)
@@ -448,27 +446,27 @@ func (h *Handler) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 					h.logger.Info("Background deletion: Successfully deleted document embeddings", "file_id", fileID)
 				}
 			}(req.ID, deleteURL)
-			
+
 			// Mark as attempted but not yet completed
 			ragResults.Attempted++
-			
+
 			// Set a message indicating that deletion is in progress
 			ragResults.ErrorMessage = "Deletion started and will continue in the background"
-			
+
 			// Mark as successful since we've started the background deletion process
 			ragResults.Successful++
-			
+
 			// Log that we've started the background deletion
 			deleteType := "standard"
 			if isZipFile {
 				deleteType = "prefix-based"
 			}
-			h.logger.Info("Started background deletion of document embeddings", 
+			h.logger.Info("Started background deletion of document embeddings",
 				"file_id", req.ID,
 				"sanitized_id", sanitizedID,
 				"delete_type", deleteType,
 				"delete_url", deleteURL)
-			
+
 			// Add detailed log about the asynchronous process
 			h.logger.Info("Asynchronous deletion details",
 				"file_id", req.ID,
@@ -477,7 +475,7 @@ func (h *Handler) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 				"process", "Background goroutine will continue deletion after HTTP response")
 
 		}
-		
+
 		// Return a 202 Accepted status with informative message about background deletion
 		responseData := DeleteFileResponse{
 			Success: true,
@@ -488,7 +486,7 @@ func (h *Handler) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
 		json.NewEncoder(w).Encode(responseData)
-	
+
 	case <-ctx.Done():
 		// Context timeout or cancellation
 		h.logger.Error("Delete operation timed out", "file_id", req.ID)
@@ -527,7 +525,7 @@ func (h *Handler) handleListAgents(w http.ResponseWriter, r *http.Request) {
 		// Return agents
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(ListAgentsResponse{
-			Agents:  agents,
+			Agents: agents,
 		})
 		return
 	} else if r.Method == http.MethodPost {
@@ -596,7 +594,7 @@ func (h *Handler) handleUI(w http.ResponseWriter, r *http.Request) {
 
 	// Serve a simple HTML form for knowledge management
 	w.Header().Set("Content-Type", "text/html")
-	
+
 	html := `<!DOCTYPE html>
 <html>
 <head>
