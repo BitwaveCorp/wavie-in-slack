@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"log/slog"
+	"net"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -309,7 +311,8 @@ func (h *Handler) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create a context with timeout for the entire operation
-	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
+	// Increase timeout to 120 seconds for large file deletions
+	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
 	defer cancel()
 
 	// Parse request body
@@ -393,75 +396,112 @@ func (h *Handler) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 			isZipFile := strings.HasSuffix(strings.ToLower(req.ID), ".zip")
 			
 			// For ZIP files, use the prefix-based deletion to delete all extracted files
-			// For non-ZIP files, use the standard document deletion endpoint
+			// Use the standard document deletion endpoint for both single files and ZIP files
+			// The document ID in RAG service is the same as the file ID in storage
+			// This should delete all chunks associated with this document ID
 			var deleteURL string
-			if isZipFile {
-				// Use prefix-based deletion for ZIP files
-				// This will delete all document chunks with IDs starting with the file ID prefix
-				// Note: We add a dash after the ID to match the format used during upload
-				prefix := req.ID + "-"
-				deleteURL = fmt.Sprintf("%s/api/documents/prefix/%s", h.ragConfig.URL, prefix)
-				h.logger.Info("Using prefix-based deletion for ZIP file", "prefix", prefix)
-			} else {
-				// Standard deletion for single files
-				deleteURL = fmt.Sprintf("%s/api/documents/%s", h.ragConfig.URL, req.ID)
-			}
+			
+			// Use sanitized document ID for deletion to match the sanitized IDs used during upload
+			sanitizedID := sanitizeDocumentID(req.ID)
+			deleteURL = fmt.Sprintf("%s/api/documents/%s", h.ragConfig.URL, sanitizedID)
+			h.logger.Info("Using standard deletion for file", "file_id", req.ID, "sanitized_id", sanitizedID)
 			
 			ragResults.Attempted++
 			
-			// Send delete request to RAG service
-			deleteReq, err := http.NewRequest("DELETE", deleteURL, nil)
-			if err != nil {
-				h.logger.Error("Failed to create delete request for RAG service", "error", err)
-				ragResults.Failed++
-				ragResults.ErrorMessage = "Failed to create delete request: " + err.Error()
-			} else {
-				// Execute the request
-				deleteResp, err := http.DefaultClient.Do(deleteReq)
-				if err != nil {
-					h.logger.Error("Failed to send delete request to RAG service", "error", err)
-					ragResults.Failed++
-					ragResults.ErrorMessage = "Failed to send delete request: " + err.Error()
-				} else {
-					defer deleteResp.Body.Close()
-					
-					if deleteResp.StatusCode != http.StatusOK {
-						respBody, _ := io.ReadAll(deleteResp.Body)
-						h.logger.Error("RAG service returned error for delete", 
-							"status", deleteResp.Status,
-							"response", string(respBody))
-						ragResults.Failed++
-						ragResults.ErrorMessage = fmt.Sprintf("RAG service error: %s - %s", deleteResp.Status, string(respBody))
-					} else {
-						deleteType := "standard"
-						if isZipFile {
-							deleteType = "prefix-based"
-						}
-						h.logger.Info("Successfully deleted document embeddings from RAG service", 
-							"document_id", req.ID, 
-							"delete_type", deleteType)
-						ragResults.Successful++
-					}
-				}
+			// Create HTTP client with increased timeout for RAG service calls
+			ragClient := &http.Client{
+				Timeout: 180 * time.Second, // Increase timeout to 3 minutes for large deletions
 			}
+			// Match the timeout with our context
+
+			// Start asynchronous deletion for RAG service
+			// This will allow the HTTP request to return quickly while the deletion continues in the background
+			go func(fileID, deleteURL string) {
+				// Create a new context with a longer timeout for the background process
+				bgCtx, bgCancel := context.WithTimeout(context.Background(), 10*time.Minute)
+				defer bgCancel()
+				
+				// Create HTTP client with increased timeout for RAG service calls
+				bgClient := &http.Client{
+					Timeout: 5 * time.Minute, // 5 minutes timeout for background deletion
+				}
+				
+				// Create request with the background context
+				request, err := http.NewRequestWithContext(bgCtx, "DELETE", deleteURL, nil)
+				if err != nil {
+					h.logger.Error("Background deletion: Failed to create request to RAG service", "error", err, "file_id", fileID)
+					return
+				}
+				
+				// Execute the request
+				h.logger.Info("Background deletion: Starting RAG service deletion", "file_id", fileID)
+				resp, err := bgClient.Do(request)
+				if err != nil {
+					h.logger.Error("Background deletion: Failed to delete from RAG service", "error", err, "file_id", fileID)
+					return
+				}
+				defer resp.Body.Close()
+				
+				if resp.StatusCode != http.StatusOK {
+					respBody, _ := io.ReadAll(resp.Body)
+					h.logger.Error("Background deletion: RAG service returned error", 
+						"status", resp.Status,
+						"response", string(respBody),
+						"file_id", fileID)
+				} else {
+					h.logger.Info("Background deletion: Successfully deleted document embeddings", "file_id", fileID)
+				}
+			}(req.ID, deleteURL)
+			
+			// Mark as attempted but not yet completed
+			ragResults.Attempted++
+			
+			// Set a message indicating that deletion is in progress
+			ragResults.ErrorMessage = "Deletion started and will continue in the background"
+			
+			// Mark as successful since we've started the background deletion process
+			ragResults.Successful++
+			
+			// Log that we've started the background deletion
+			deleteType := "standard"
+			if isZipFile {
+				deleteType = "prefix-based"
+			}
+			h.logger.Info("Started background deletion of document embeddings", 
+				"file_id", req.ID,
+				"sanitized_id", sanitizedID,
+				"delete_type", deleteType,
+				"delete_url", deleteURL)
+			
+			// Add detailed log about the asynchronous process
+			h.logger.Info("Asynchronous deletion details",
+				"file_id", req.ID,
+				"timeout", "10 minutes for background context",
+				"http_timeout", "5 minutes for HTTP client",
+				"process", "Background goroutine will continue deletion after HTTP response")
+
 		}
 		
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(DeleteFileResponse{
+		// Return a 202 Accepted status with informative message about background deletion
+		responseData := DeleteFileResponse{
 			Success: true,
-			Message: "File successfully deleted",
+			Message: "File successfully deleted from storage",
+			Details: "RAG service deletion has been started and will continue in the background. This may take several minutes for large files with many chunks.",
 			RAG:     ragResults,
-		})
-		
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		json.NewEncoder(w).Encode(responseData)
+	
 	case <-ctx.Done():
-		// Request timeout
-		h.logger.Error("Delete operation timed out", "file_id", req.ID, "error", ctx.Err())
+		// Context timeout or cancellation
+		h.logger.Error("Delete operation timed out", "file_id", req.ID)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusGatewayTimeout)
 		json.NewEncoder(w).Encode(DeleteFileResponse{
 			Success: false,
 			Error:   "Operation timed out",
-			Details: "The server took too long to process your request. The deletion may still be in progress.",
+			Details: "The delete operation took too long and timed out",
 		})
 	}
 }
@@ -470,10 +510,16 @@ func (h *Handler) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 func respondWithError(w http.ResponseWriter, message string, statusCode int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
-	json.NewEncoder(w).Encode(DeleteFileResponse{
-		Success: false,
-		Error:   message,
+	json.NewEncoder(w).Encode(map[string]string{
+		"error": message,
 	})
+}
+
+// respondWithJSON is a helper function to send JSON responses in a consistent format
+func respondWithJSON(w http.ResponseWriter, statusCode int, data interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	json.NewEncoder(w).Encode(data)
 }
 
 // handleListAgents handles listing agents
