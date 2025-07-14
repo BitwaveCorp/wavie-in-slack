@@ -47,6 +47,9 @@ type UploadResponse struct {
 	
 	// Extraction details
 	Extraction *ExtractionDetails `json:"extraction,omitempty"`
+	
+	// RAG processing details
+	RAG interface{} `json:"rag,omitempty"`
 }
 
 // ExtractionDetails contains information about the ZIP extraction process

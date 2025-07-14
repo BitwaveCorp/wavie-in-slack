@@ -97,7 +97,17 @@ func (h *Handler) handleUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	
 	// Send to RAG service for embedding generation if enabled
-	if h.ragConfig != nil && h.ragConfig.Enabled && h.ragConfig.URL != "" {
+	ragResults := struct {
+		Enabled      bool   `json:"enabled"`
+		Processed    int    `json:"processed"`
+		Successful   int    `json:"successful"`
+		Failed       int    `json:"failed"`
+		ErrorMessage string `json:"error_message,omitempty"`
+	}{
+		Enabled: h.ragConfig != nil && h.ragConfig.Enabled && h.ragConfig.URL != "",
+	}
+
+	if ragResults.Enabled {
 		// Get the extracted directory path
 		extractedPath := filepath.Join(knowledgeFile.FilePath, "extracted")
 		h.logger.Info("Processing extracted directory for RAG service", "path", extractedPath)
@@ -110,6 +120,7 @@ func (h *Handler) handleUpload(w http.ResponseWriter, r *http.Request) {
 				path, err := gcpStorage.ensureExtractedDirExists(knowledgeFile.FilePath)
 				if err != nil {
 					h.logger.Error("Failed to ensure extracted directory exists in cache", "path", extractedPath, "error", err)
+					ragResults.ErrorMessage = "Failed to access extracted files: " + err.Error()
 				} else {
 					localExtractedPath = path
 					h.logger.Info("Using cached extracted directory", "path", localExtractedPath)
@@ -156,8 +167,12 @@ func (h *Handler) handleUpload(w http.ResponseWriter, r *http.Request) {
 				})
 				if err != nil {
 					h.logger.Error("Failed to marshal RAG request", "error", err)
+					ragResults.Failed++
 					return nil
 				}
+				
+				// Increment processed count
+				ragResults.Processed++
 				
 				// Send to RAG service
 				resp, err := http.Post(
@@ -167,6 +182,7 @@ func (h *Handler) handleUpload(w http.ResponseWriter, r *http.Request) {
 				)
 				if err != nil {
 					h.logger.Error("Failed to send file to RAG service", "error", err)
+					ragResults.Failed++
 					return nil
 				}
 				defer resp.Body.Close()
@@ -177,14 +193,20 @@ func (h *Handler) handleUpload(w http.ResponseWriter, r *http.Request) {
 					h.logger.Error("RAG service returned error", 
 						"status", resp.Status,
 						"response", string(respBody))
+					ragResults.Failed++
+					if ragResults.ErrorMessage == "" {
+						ragResults.ErrorMessage = fmt.Sprintf("RAG service error: %s - %s", resp.Status, string(respBody))
+					}
 					return nil
 				}
 				
 				h.logger.Info("Successfully sent file to RAG service", "file_path", gcsFilePath)
+				ragResults.Successful++
 				return nil
 			})
-		} else {
-			h.logger.Warn("Could not process files for RAG service: no local path available")
+		} else if ragResults.ErrorMessage == "" {
+			ragResults.ErrorMessage = "Could not process files for RAG service: no local path available"
+			h.logger.Warn(ragResults.ErrorMessage)
 		}
 	}
 
@@ -201,6 +223,15 @@ func (h *Handler) handleUpload(w http.ResponseWriter, r *http.Request) {
 		extractionDetails.ErrorMessage = extractionResult.Error.Error()
 	}
 
+	// Create RAG details for response
+	ragDetails := struct {
+		Enabled      bool   `json:"enabled"`
+		Processed    int    `json:"processed"`
+		Successful   int    `json:"successful"`
+		Failed       int    `json:"failed"`
+		ErrorMessage string `json:"error_message,omitempty"`
+	}(ragResults)
+
 	// Return success response
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
@@ -208,6 +239,7 @@ func (h *Handler) handleUpload(w http.ResponseWriter, r *http.Request) {
 		Success:    true,
 		FileID:     knowledgeFile.ID,
 		Extraction: extractionDetails,
+		RAG:        ragDetails,
 	})
 }
 
@@ -433,73 +465,13 @@ func (h *Handler) handleUI(w http.ResponseWriter, r *http.Request) {
             margin: 0 auto;
             padding: 20px;
         }
-        .progress-container {
-            width: 100%;
-            background-color: #f1f1f1;
-            border-radius: 4px;
-            margin: 10px 0;
-        }
-        .progress-bar {
-            height: 20px;
-            background-color: #4CAF50;
-            border-radius: 4px;
-            width: 0%;
-            transition: width 0.3s;
-        }
-        #extraction-details {
-            background-color: #f9f9f9;
-            border: 1px solid #ddd;
-            padding: 10px;
-            margin-top: 10px;
-            border-radius: 4px;
-        }
-        .success-message {
-            color: #4CAF50;
-            font-weight: bold;
-        }
-        .error-message {
-            color: #f44336;
-            font-weight: bold;
-        }
         h1, h2 {
             color: #333;
         }
-        .form-group {
-            margin-bottom: 15px;
-        }
-        label {
-            display: block;
-            margin-bottom: 5px;
-        }
-        input[type="text"], textarea {
-            width: 100%;
-            padding: 8px;
-            box-sizing: border-box;
-        }
-        button {
-            background-color: #4CAF50;
-            color: white;
-            padding: 10px 15px;
-            border: none;
-            cursor: pointer;
-        }
-        button:hover {
-            background-color: #45a049;
-        }
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-top: 20px;
-        }
-        th, td {
-            border: 1px solid #ddd;
-            padding: 8px;
-            text-align: left;
-        }
-        th {
-            background-color: #f2f2f2;
-        }
-        /* Tab styles */
+        .upload-form {
+            background-color: #f5f5f5;
+            padding: 20px;
+            border-radius: 5px;
         .tabs {
             overflow: hidden;
             border: 1px solid #ccc;
@@ -826,6 +798,45 @@ func (h *Handler) handleUI(w http.ResponseWriter, r *http.Request) {
                     } else {
                         uploadStatus.innerHTML += '<br><span class="error-message">Extraction failed: ' + 
                             (data.extraction.error_message || 'Unknown error') + '</span>';
+                    }
+                }
+                
+                // Display RAG processing details if available
+                if (data.rag) {
+                    // Create RAG details section if it doesn't exist
+                    let ragDetails = document.getElementById('rag-details');
+                    if (!ragDetails) {
+                        ragDetails = document.createElement('div');
+                        ragDetails.id = 'rag-details';
+                        ragDetails.className = 'details-section';
+                        ragDetails.innerHTML = '<h3>RAG Processing Results</h3>' +
+                            '<ul>' +
+                            '<li>Files Processed: <span id="rag-processed">0</span></li>' +
+                            '<li>Successfully Embedded: <span id="rag-successful">0</span></li>' +
+                            '<li>Failed: <span id="rag-failed">0</span></li>' +
+                            '</ul>';
+                        document.getElementById('extraction-details').after(ragDetails);
+                    }
+                    
+                    // Update RAG stats
+                    document.getElementById('rag-processed').textContent = data.rag.processed;
+                    document.getElementById('rag-successful').textContent = data.rag.successful;
+                    document.getElementById('rag-failed').textContent = data.rag.failed;
+                    
+                    // Show RAG status
+                    if (data.rag.enabled) {
+                        if (data.rag.successful > 0) {
+                            uploadStatus.innerHTML += '<br><span class="success-message">Files processed by RAG service: ' + 
+                                data.rag.successful + ' of ' + data.rag.processed + ' successful</span>';
+                        }
+                        if (data.rag.failed > 0) {
+                            uploadStatus.innerHTML += '<br><span class="error-message">RAG processing failed for ' + 
+                                data.rag.failed + ' files</span>';
+                        }
+                        if (data.rag.error_message) {
+                            uploadStatus.innerHTML += '<br><span class="error-message">RAG error: ' + 
+                                data.rag.error_message + '</span>';
+                        }
                     }
                 }
                 
