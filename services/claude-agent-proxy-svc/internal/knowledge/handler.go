@@ -266,7 +266,7 @@ func (h *Handler) handleListFiles(w http.ResponseWriter, r *http.Request) {
 
 // DeleteFileRequest represents a request to delete a knowledge file
 type DeleteFileRequest struct {
-	ID string `json:"id"`
+	ID string `json:"ID"`
 }
 
 // DeleteFileResponse represents the response for file deletion
@@ -1161,7 +1161,7 @@ func (h *Handler) handleUI(w http.ResponseWriter, r *http.Request) {
                         headers: {
                             'Content-Type': 'application/json'
                         },
-                        body: JSON.stringify({ id: fileId })
+                        body: JSON.stringify({ ID: fileId })
                     })
                     .then(response => {
                         if (!response.ok) {
