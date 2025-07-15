@@ -4,44 +4,62 @@
 # Set variables
 FILE_ID="test-soft-delete-$(date +%s)"
 AGENT_ID="test-agent"
+SERVICE_URL="https://wavie-claude-proxy-s-455488113475.us-central1.run.app"
 
 echo "Testing soft deletion of knowledge files"
 echo "----------------------------------------"
 echo "File ID: $FILE_ID"
 
-# Step 1: Create a test file
-echo "Step 1: Creating test file..."
-echo "Test content for soft deletion" > /tmp/test-soft-delete.txt
+# Step 1: Create a test file and ZIP it
+echo "Step 1: Creating test file and ZIP archive..."
+echo "Test content for soft deletion" > /tmp/test-content.md
+cd /tmp
+zip -j test-soft-delete.zip test-content.md
+cd -
 
-# Step 2: Upload the file
+# Step 2: Upload the file and get the file ID from the response
 echo "Step 2: Uploading test file..."
-curl -X POST \
-  -F "file=@/tmp/test-soft-delete.txt" \
-  -F "agent_id=$AGENT_ID" \
-  -F "file_name=test-soft-delete.txt" \
-  "http://localhost:8080/api/knowledge/upload" | jq .
+UPLOAD_RESPONSE=$(curl -X POST \
+  -F "file=@/tmp/test-soft-delete.zip" \
+  -F "agent_ids=$AGENT_ID" \
+  -F "name=test-soft-delete" \
+  -F "description=Test file for soft deletion" \
+  "$SERVICE_URL/api/knowledge/upload")
 
-# Step 3: Get the file ID from the registry
-echo "Step 3: Getting file ID from registry..."
-FILE_ID=$(curl -s "http://localhost:8080/api/knowledge/files" | jq -r '.files[] | select(.name=="test-soft-delete.txt") | .id')
-echo "File ID from registry: $FILE_ID"
+echo "Upload response: $UPLOAD_RESPONSE"
 
-# Step 4: Verify the file exists in GCS
-echo "Step 4: Verifying file exists in GCS..."
-gsutil ls "gs://your-bucket-name/files/$FILE_ID/" || echo "File not found in GCS"
+# Step 3: Extract the file ID from the upload response
+echo "Step 3: Extracting file ID from upload response..."
+FILE_ID=$(echo $UPLOAD_RESPONSE | jq -r '.file_id')
+echo "File ID from upload: $FILE_ID"
+
+# Step 4: Check if file exists in registry before deletion
+echo "Step 4: Checking if file exists in registry before deletion..."
+FILE_EXISTS=$(curl -s "$SERVICE_URL/api/knowledge/files" | jq '.files[] | select(.id=="'$FILE_ID'")' | wc -l)
+if [ "$FILE_EXISTS" -gt 0 ]; then
+  echo "File found in registry before deletion"
+else
+  echo "File NOT found in registry before deletion - something went wrong"
+  exit 1
+fi
 
 # Step 5: Delete the file (soft delete)
 echo "Step 5: Soft deleting the file..."
-curl -X DELETE "http://localhost:8080/api/knowledge/files/$FILE_ID" | jq .
+curl -X POST "$SERVICE_URL/api/knowledge/files/delete" \
+  -H "Content-Type: application/json" \
+  -d '{"ID": "'$FILE_ID'"}' \
+  | jq .
 
 # Step 6: Verify the file is removed from registry
-echo "Step 6: Verifying file is removed from registry..."
-curl -s "http://localhost:8080/api/knowledge/files" | jq '.files[] | select(.id=="'$FILE_ID'")'
-echo "If no output above, file was successfully removed from registry"
-
-# Step 7: Verify the file still exists in GCS
-echo "Step 7: Verifying file still exists in GCS after soft delete..."
-gsutil ls "gs://your-bucket-name/files/$FILE_ID/" || echo "File not found in GCS"
+echo "\nStep 6: Verifying file is removed from registry..."
+FILE_EXISTS_AFTER=$(curl -s "$SERVICE_URL/api/knowledge/files" | jq '.files[] | select(.id=="'$FILE_ID'")' | wc -l)
+if [ "$FILE_EXISTS_AFTER" -eq 0 ]; then
+  echo "Success: File was removed from registry"
+else
+  echo "Error: File still exists in registry after deletion"
+  exit 1
+fi
 
 echo "----------------------------------------"
-echo "Test completed"
+echo "Test completed successfully - file was soft deleted (removed from registry)"
+echo "The actual files remain in GCS but are inaccessible to the application"

@@ -76,7 +76,7 @@ func NewGCPStorageManager(ctx context.Context, bucketName, registryKey string, l
 			}
 			sm.registry.Agents = append(sm.registry.Agents, defaultAgent)
 
-			if err := sm.saveRegistry(ctx); err != nil {
+			if err := sm.saveRegistry(ctx, false); err != nil {
 				sm.logger.Error("Failed to save initial registry", "error", err)
 				return nil, fmt.Errorf("failed to save initial registry: %w", err)
 			}
@@ -132,10 +132,13 @@ func (sm *GCPStorageManager) loadRegistry(ctx context.Context) error {
 }
 
 // saveRegistry saves the registry to GCS
-func (sm *GCPStorageManager) saveRegistry(ctx context.Context) error {
+// If lockAlreadyHeld is true, it assumes the caller already holds the mutex lock
+func (sm *GCPStorageManager) saveRegistry(ctx context.Context, lockAlreadyHeld bool) error {
 	sm.logger.Info("Saving registry to GCS", "bucket", sm.bucketName, "key", sm.registryKey)
-	sm.mutex.Lock()
-	defer sm.mutex.Unlock()
+	if !lockAlreadyHeld {
+		sm.mutex.Lock()
+		defer sm.mutex.Unlock()
+	}
 
 	sm.logger.Info("Creating new writer for registry object")
 	writer := sm.client.Bucket(sm.bucketName).Object(sm.registryKey).NewWriter(ctx)
@@ -236,7 +239,7 @@ func (sm *GCPStorageManager) StoreKnowledgeFile(name, description string, agentI
 	sm.mutex.Unlock()
 
 	// Save registry
-	if err := sm.saveRegistry(ctx); err != nil {
+	if err := sm.saveRegistry(ctx, false); err != nil {
 		return nil, extractionResult, fmt.Errorf("failed to update registry: %w", err)
 	}
 
@@ -324,8 +327,8 @@ func (sm *GCPStorageManager) DeleteKnowledgeFile(id string) error {
 		sm.registry.KnowledgeFiles[fileIndex+1:]...,
 	)
 	
-	// Save registry
-	if err := sm.saveRegistry(ctx); err != nil {
+	// Save registry - we already hold the lock
+	if err := sm.saveRegistry(ctx, true); err != nil {
 		sm.logger.Error("Failed to save registry after file deletion", "error", err)
 		// Continue with deletion anyway
 	}
@@ -409,7 +412,7 @@ func (sm *GCPStorageManager) CreateAgent(id, name, description, tenantID string)
 	sm.registry.Agents = append(sm.registry.Agents, agent)
 
 	// Save registry
-	if err := sm.saveRegistry(ctx); err != nil {
+	if err := sm.saveRegistry(ctx, false); err != nil {
 		return nil, fmt.Errorf("failed to save registry: %w", err)
 	}
 
