@@ -186,7 +186,22 @@ func (sm *StorageManager) StoreKnowledgeFile(name, description string, agentIDs 
 	
 	// Update registry
 	sm.mutex.Lock()
+	
+	// Add the new file to the registry
 	sm.registry.KnowledgeFiles = append(sm.registry.KnowledgeFiles, knowledgeFile)
+	
+	// Set this file as the active file for each agent it's associated with
+	for _, agentID := range agentIDs {
+		// Find the agent in the registry
+		for i, agent := range sm.registry.Agents {
+			if agent.ID == agentID {
+				// Update the agent's active knowledge file ID
+				sm.registry.Agents[i].ActiveKnowledgeFileID = fileID
+				sm.logger.Info("Set active knowledge file for agent", "agent_id", agentID, "file_id", fileID)
+				break
+			}
+		}
+	}
 	sm.mutex.Unlock()
 	
 	// Save registry
@@ -257,11 +272,34 @@ func (sm *StorageManager) extractZipFile(zipPath, destPath string) error {
 	return nil
 }
 
-// GetKnowledgeFilesForAgent returns all knowledge files associated with an agent
+// GetKnowledgeFilesForAgent returns knowledge files associated with an agent,
+// prioritizing the active knowledge file if one exists
 func (sm *StorageManager) GetKnowledgeFilesForAgent(agentID string) []KnowledgeFile {
 	sm.mutex.RLock()
 	defer sm.mutex.RUnlock()
 	
+	// First, find the active knowledge file ID for this agent
+	var activeFileID string
+	for _, agent := range sm.registry.Agents {
+		if agent.ID == agentID && agent.ActiveKnowledgeFileID != "" {
+			activeFileID = agent.ActiveKnowledgeFileID
+			break
+		}
+	}
+
+	// If we have an active file ID, return only that file
+	if activeFileID != "" {
+		for _, file := range sm.registry.KnowledgeFiles {
+			if file.ID == activeFileID {
+				// Return only the active file
+				sm.logger.Info("Using active knowledge file for agent", "agent_id", agentID, "file_id", activeFileID)
+				return []KnowledgeFile{file}
+			}
+		}
+	}
+
+	// Fallback: If no active file is found or it doesn't exist in registry,
+	// return all files associated with this agent (original behavior)
 	var files []KnowledgeFile
 	for _, file := range sm.registry.KnowledgeFiles {
 		for _, id := range file.AgentIDs {
@@ -272,6 +310,7 @@ func (sm *StorageManager) GetKnowledgeFilesForAgent(agentID string) []KnowledgeF
 		}
 	}
 	
+	sm.logger.Info("No active knowledge file found, using all files", "agent_id", agentID, "file_count", len(files))
 	return files
 }
 
@@ -313,11 +352,25 @@ func (sm *StorageManager) DeleteKnowledgeFile(id string) error {
 		return fmt.Errorf("knowledge file not found: %s", id)
 	}
 
+	// Get the file's agent IDs before removing it
+	agentIDs := sm.registry.KnowledgeFiles[fileIndex].AgentIDs
+	fileID := sm.registry.KnowledgeFiles[fileIndex].ID
+	
 	// Remove the file from the registry
 	sm.registry.KnowledgeFiles = append(
 		sm.registry.KnowledgeFiles[:fileIndex],
 		sm.registry.KnowledgeFiles[fileIndex+1:]...,
 	)
+	
+	// Clear the active knowledge file reference for any agent that was using this file
+	for _, agentID := range agentIDs {
+		for i, agent := range sm.registry.Agents {
+			if agent.ID == agentID && agent.ActiveKnowledgeFileID == fileID {
+				sm.registry.Agents[i].ActiveKnowledgeFileID = ""
+				sm.logger.Info("Cleared active knowledge file reference for agent", "agent_id", agentID, "file_id", fileID)
+			}
+		}
+	}
 
 	// Save the updated registry
 	err := sm.saveRegistry()

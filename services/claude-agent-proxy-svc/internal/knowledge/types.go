@@ -18,12 +18,13 @@ type KnowledgeFile struct {
 
 // Agent represents an AI agent in the system
 type Agent struct {
-	ID          string   `json:"id"`
-	Name        string   `json:"name"`
-	Description string   `json:"description"`
-	TenantID    string   `json:"tenant_id"`
-	ApiKey      string   `json:"api_key,omitempty"`
-	CreatedAt   time.Time `json:"created_at"`
+	ID                  string    `json:"id"`
+	Name                string    `json:"name"`
+	Description         string    `json:"description"`
+	TenantID            string    `json:"tenant_id"`
+	ApiKey              string    `json:"api_key,omitempty"`
+	CreatedAt           time.Time `json:"created_at"`
+	ActiveKnowledgeFileID string    `json:"active_knowledge_file_id,omitempty"`
 }
 
 // KnowledgeRegistry stores the mapping between agents and knowledge files
