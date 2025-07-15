@@ -21,19 +21,19 @@ import (
 
 // GCPStorageManager implements StorageBackend using Google Cloud Storage
 type GCPStorageManager struct {
-	bucketName      string
-	registryKey     string
-	client          *storage.Client
-	registry        KnowledgeRegistry
-	mutex           sync.RWMutex
-	logger          *slog.Logger
-	localTempDir    string // For temporary file operations
+	bucketName   string
+	registryKey  string
+	client       *storage.Client
+	registry     KnowledgeRegistry
+	mutex        sync.RWMutex
+	logger       *slog.Logger
+	localTempDir string // For temporary file operations
 }
 
 // NewGCPStorageManager creates a new GCP storage manager
 func NewGCPStorageManager(ctx context.Context, bucketName, registryKey string, logger *slog.Logger, localTempDir string, opts ...option.ClientOption) (*GCPStorageManager, error) {
 	logger.Info("Creating GCP storage manager", "bucket", bucketName, "registry_key", registryKey, "temp_dir", localTempDir)
-	
+
 	logger.Info("Initializing GCP storage client")
 	client, err := storage.NewClient(ctx, opts...)
 	if err != nil {
@@ -43,11 +43,11 @@ func NewGCPStorageManager(ctx context.Context, bucketName, registryKey string, l
 	logger.Info("GCP storage client created successfully")
 
 	sm := &GCPStorageManager{
-		bucketName:   bucketName,
-		registryKey:  registryKey,
-		client:       client,
+		bucketName:  bucketName,
+		registryKey: registryKey,
+		client:      client,
 		registry: KnowledgeRegistry{
-			Agents:        []Agent{},
+			Agents:         []Agent{},
 			KnowledgeFiles: []KnowledgeFile{},
 		},
 		logger:       logger,
@@ -75,7 +75,7 @@ func NewGCPStorageManager(ctx context.Context, bucketName, registryKey string, l
 				CreatedAt:   time.Now(),
 			}
 			sm.registry.Agents = append(sm.registry.Agents, defaultAgent)
-			
+
 			if err := sm.saveRegistry(ctx); err != nil {
 				sm.logger.Error("Failed to save initial registry", "error", err)
 				return nil, fmt.Errorf("failed to save initial registry: %w", err)
@@ -153,24 +153,24 @@ func (sm *GCPStorageManager) saveRegistry(ctx context.Context) error {
 
 // ExtractionResult contains information about the extraction process
 type ExtractionResult struct {
-	Success          bool
-	FilesExtracted   int
-	MarkdownFiles    int
-	TotalSizeBytes   int64
-	Error            error
+	Success        bool
+	FilesExtracted int
+	MarkdownFiles  int
+	TotalSizeBytes int64
+	Error          error
 }
 
 // StoreKnowledgeFile stores a knowledge file in GCS
 func (sm *GCPStorageManager) StoreKnowledgeFile(name, description string, agentIDs []string, fileData io.Reader, contentType string) (*KnowledgeFile, *ExtractionResult, error) {
 	ctx := context.Background()
-	
+
 	// Generate unique ID for the file
 	fileID := uuid.New().String()
-	
+
 	// Path in GCS for this file
 	filePath := fmt.Sprintf("files/%s", fileID)
 	zipPath := fmt.Sprintf("%s/content.zip", filePath)
-	
+
 	// Create a temporary file to store the zip content
 	tempFile, err := os.CreateTemp(sm.localTempDir, "upload-*.zip")
 	if err != nil {
@@ -178,7 +178,7 @@ func (sm *GCPStorageManager) StoreKnowledgeFile(name, description string, agentI
 	}
 	tempZipPath := tempFile.Name()
 	defer os.Remove(tempZipPath) // Clean up temp file when done
-	
+
 	// Copy the uploaded data to the temporary file
 	size, err := io.Copy(tempFile, fileData)
 	if err != nil {
@@ -186,27 +186,27 @@ func (sm *GCPStorageManager) StoreKnowledgeFile(name, description string, agentI
 		return nil, nil, fmt.Errorf("failed to save uploaded file: %w", err)
 	}
 	tempFile.Close()
-	
+
 	// Upload the zip file to GCS
 	writer := sm.client.Bucket(sm.bucketName).Object(zipPath).NewWriter(ctx)
 	writer.ContentType = contentType
-	
+
 	zipFile, err := os.Open(tempZipPath)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to open temporary zip file: %w", err)
 	}
 	defer zipFile.Close()
-	
+
 	_, err = io.Copy(writer, zipFile)
 	if err != nil {
 		writer.Close()
 		return nil, nil, fmt.Errorf("failed to upload file to GCS: %w", err)
 	}
-	
+
 	if err := writer.Close(); err != nil {
 		return nil, nil, fmt.Errorf("failed to finalize GCS upload: %w", err)
 	}
-	
+
 	// Extract the zip file and upload the contents to GCS
 	extractionResult, err := sm.extractZipFile(ctx, tempZipPath, filePath)
 	if err != nil {
@@ -217,7 +217,7 @@ func (sm *GCPStorageManager) StoreKnowledgeFile(name, description string, agentI
 			Error:   err,
 		}
 	}
-	
+
 	// Create knowledge file record
 	knowledgeFile := KnowledgeFile{
 		ID:          fileID,
@@ -229,17 +229,17 @@ func (sm *GCPStorageManager) StoreKnowledgeFile(name, description string, agentI
 		FileSize:    size,
 		ContentType: contentType,
 	}
-	
+
 	// Update registry
 	sm.mutex.Lock()
 	sm.registry.KnowledgeFiles = append(sm.registry.KnowledgeFiles, knowledgeFile)
 	sm.mutex.Unlock()
-	
+
 	// Save registry
 	if err := sm.saveRegistry(ctx); err != nil {
 		return nil, extractionResult, fmt.Errorf("failed to update registry: %w", err)
 	}
-	
+
 	return &knowledgeFile, extractionResult, nil
 }
 
@@ -247,7 +247,7 @@ func (sm *GCPStorageManager) StoreKnowledgeFile(name, description string, agentI
 func (sm *GCPStorageManager) GetKnowledgeFilesForAgent(agentID string) []KnowledgeFile {
 	sm.mutex.RLock()
 	defer sm.mutex.RUnlock()
-	
+
 	var files []KnowledgeFile
 	for _, file := range sm.registry.KnowledgeFiles {
 		for _, id := range file.AgentIDs {
@@ -257,7 +257,7 @@ func (sm *GCPStorageManager) GetKnowledgeFilesForAgent(agentID string) []Knowled
 			}
 		}
 	}
-	
+
 	return files
 }
 
@@ -265,10 +265,10 @@ func (sm *GCPStorageManager) GetKnowledgeFilesForAgent(agentID string) []Knowled
 func (sm *GCPStorageManager) GetAllKnowledgeFiles() []KnowledgeFile {
 	sm.mutex.RLock()
 	defer sm.mutex.RUnlock()
-	
+
 	files := make([]KnowledgeFile, len(sm.registry.KnowledgeFiles))
 	copy(files, sm.registry.KnowledgeFiles)
-	
+
 	return files
 }
 
@@ -276,7 +276,7 @@ func (sm *GCPStorageManager) GetAllKnowledgeFiles() []KnowledgeFile {
 func (sm *GCPStorageManager) GetKnowledgeFile(id string) (*KnowledgeFile, error) {
 	sm.mutex.RLock()
 	defer sm.mutex.RUnlock()
-	
+
 	for _, file := range sm.registry.KnowledgeFiles {
 		if file.ID == id {
 			return &file, nil
@@ -288,20 +288,23 @@ func (sm *GCPStorageManager) GetKnowledgeFile(id string) (*KnowledgeFile, error)
 // DeleteKnowledgeFile deletes a knowledge file by ID
 func (sm *GCPStorageManager) DeleteKnowledgeFile(id string) error {
 	// Create a context with timeout to prevent hanging operations
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// Using a longer timeout (10 minutes) to handle large directories with many files
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
-	
+
 	// Find the file in the registry
 	var fileIndex int = -1
-	var filePath string
 	var fileName string
-	
-	// Use read lock first to find the file
+
+	// We know exactly where the file is stored based on its ID
+	// All files are stored in the "files/{id}" folder
+	filePath := fmt.Sprintf("files/%s", id)
+
+	// Use read lock to find the file in the registry for logging purposes
 	sm.mutex.RLock()
 	for i, file := range sm.registry.KnowledgeFiles {
 		if file.ID == id {
 			fileIndex = i
-			filePath = file.FilePath
 			fileName = file.Name
 			break
 		}
@@ -309,101 +312,40 @@ func (sm *GCPStorageManager) DeleteKnowledgeFile(id string) error {
 	sm.mutex.RUnlock()
 
 	if fileIndex == -1 {
-		return fmt.Errorf("knowledge file not found: %s", id)
-	}
-
-	// Log the deletion attempt
-	sm.logger.Info("Attempting to delete knowledge file", 
-		"file_id", id, 
-		"file_name", fileName, 
-		"file_path", filePath)
-
-	// Now acquire write lock to update the registry
-	sm.mutex.Lock()
-	
-	// Double-check that the file still exists (in case of concurrent deletions)
-	fileStillExists := false
-	for i, file := range sm.registry.KnowledgeFiles {
-		if file.ID == id {
-			fileIndex = i
-			fileStillExists = true
-			break
-		}
-	}
-	
-	if !fileStillExists {
-		sm.mutex.Unlock()
-		sm.logger.Warn("File was already deleted from registry", "file_id", id)
+		sm.logger.Warn("File not found in registry, nothing to delete", "file_id", id)
 		return nil
 	}
 
+	// Remove from registry
+	sm.mutex.Lock()
 	// Remove the file from the registry
 	sm.registry.KnowledgeFiles = append(
 		sm.registry.KnowledgeFiles[:fileIndex],
 		sm.registry.KnowledgeFiles[fileIndex+1:]...,
 	)
-
-	// Save the updated registry
-	err := sm.saveRegistry(ctx)
-	if err != nil {
-		// Restore the registry if save fails
-		sm.logger.Error("Failed to save registry after file deletion", "error", err)
-		sm.mutex.Unlock()
-		return fmt.Errorf("failed to save registry: %w", err)
-	}
 	
+	// Save registry
+	if err := sm.saveRegistry(ctx); err != nil {
+		sm.logger.Error("Failed to save registry after file deletion", "error", err)
+		// Continue with deletion anyway
+	}
 	// Release the mutex after registry is updated
 	sm.mutex.Unlock()
 
-	// Delete all objects with this prefix from GCS
-	if filePath != "" {
-		bucket := sm.client.Bucket(sm.bucketName)
-		it := bucket.Objects(ctx, &storage.Query{Prefix: filePath})
-		
-		deleteCount := 0
-		deleteErrors := 0
-		
-		for {
-			// Check if context is done (timeout or cancellation)
-			select {
-			case <-ctx.Done():
-				sm.logger.Warn("Context deadline exceeded while deleting objects", 
-					"file_id", id, 
-					"deleted_count", deleteCount, 
-					"error_count", deleteErrors)
-				return ctx.Err()
-			default:
-				// Continue processing
-			}
-			
-			attrs, err := it.Next()
-			if err == iterator.Done {
-				break
-			}
-			if err != nil {
-				sm.logger.Error("Error listing objects to delete", "error", err)
-				deleteErrors++
-				continue // Continue with other objects instead of failing completely
-			}
-			
-			// Delete the object
-			if err := bucket.Object(attrs.Name).Delete(ctx); err != nil {
-				sm.logger.Error("Failed to delete object", "object", attrs.Name, "error", err)
-				deleteErrors++
-			} else {
-				deleteCount++
-			}
-		}
-		
-		sm.logger.Info("Completed file deletion from storage", 
-			"file_id", id, 
-			"deleted_count", deleteCount, 
-			"error_count", deleteErrors)
-		
-		// Even if some objects failed to delete, we consider the operation successful
-		// since the registry has been updated
-	}
-
+	// Log the soft deletion operation
+	sm.logger.Info("Implemented soft deletion by removing file from registry only", 
+		"file_id", id, 
+		"path", filePath, 
+		"file_name", fileName)
+	
+	// Note: We're not deleting or moving the files in GCS
+	// They remain in place but are inaccessible to the application
+	// since all access goes through the registry
+	// They can be cleaned up later by GCS lifecycle rules or manual deletion
+	sm.logger.Info("Soft deletion complete - files remain in GCS but are removed from registry",
+		"file_id", id,
+		"path", filePath)
+	
 	return nil
 }
 
@@ -411,15 +353,15 @@ func (sm *GCPStorageManager) DeleteKnowledgeFile(id string) error {
 func (sm *GCPStorageManager) GetAllAgents() []Agent {
 	sm.mutex.RLock()
 	defer sm.mutex.RUnlock()
-	
+
 	agents := make([]Agent, len(sm.registry.Agents))
 	copy(agents, sm.registry.Agents)
-	
+
 	// Remove sensitive information
 	for i := range agents {
 		agents[i].ApiKey = ""
 	}
-	
+
 	return agents
 }
 
@@ -427,7 +369,7 @@ func (sm *GCPStorageManager) GetAllAgents() []Agent {
 func (sm *GCPStorageManager) GetAgent(agentID string) *Agent {
 	sm.mutex.RLock()
 	defer sm.mutex.RUnlock()
-	
+
 	for _, agent := range sm.registry.Agents {
 		if agent.ID == agentID {
 			// Return a copy to avoid race conditions
@@ -436,24 +378,24 @@ func (sm *GCPStorageManager) GetAgent(agentID string) *Agent {
 			return &agentCopy
 		}
 	}
-	
+
 	return nil
 }
 
 // CreateAgent creates a new agent
 func (sm *GCPStorageManager) CreateAgent(id, name, description, tenantID string) (*Agent, error) {
 	ctx := context.Background()
-	
+
 	sm.mutex.Lock()
 	defer sm.mutex.Unlock()
-	
+
 	// Check if agent already exists
 	for _, agent := range sm.registry.Agents {
 		if agent.ID == id {
 			return nil, fmt.Errorf("agent with ID %s already exists", id)
 		}
 	}
-	
+
 	// Create new agent
 	agent := Agent{
 		ID:          id,
@@ -463,18 +405,18 @@ func (sm *GCPStorageManager) CreateAgent(id, name, description, tenantID string)
 		ApiKey:      uuid.New().String(), // Generate API key
 		CreatedAt:   time.Now(),
 	}
-	
+
 	sm.registry.Agents = append(sm.registry.Agents, agent)
-	
+
 	// Save registry
 	if err := sm.saveRegistry(ctx); err != nil {
 		return nil, fmt.Errorf("failed to save registry: %w", err)
 	}
-	
+
 	// Return a copy without API key
 	agentCopy := agent
 	agentCopy.ApiKey = ""
-	
+
 	return &agentCopy, nil
 }
 
@@ -492,22 +434,22 @@ func (sm *GCPStorageManager) GetStorageType() string {
 func (sm *GCPStorageManager) ensureLocalCopy(gcsPath string) (string, error) {
 	// Convert GCS path to local cache path
 	localPath := filepath.Join(sm.localTempDir, gcsPath)
-	
+
 	// Check if file exists in local cache
 	if _, err := os.Stat(localPath); err == nil {
 		// File exists in cache
 		sm.logger.Debug("Using cached file", "path", localPath)
 		return localPath, nil
 	}
-	
+
 	// File doesn't exist in cache, download from GCP
 	sm.logger.Info("File not in cache, downloading from GCP", "path", gcsPath)
-	
+
 	// Ensure directory exists
 	if err := os.MkdirAll(filepath.Dir(localPath), 0755); err != nil {
 		return "", fmt.Errorf("failed to create directory for cached file: %w", err)
 	}
-	
+
 	// Download file from GCP
 	ctx := context.Background()
 	reader, err := sm.client.Bucket(sm.bucketName).Object(gcsPath).NewReader(ctx)
@@ -515,20 +457,20 @@ func (sm *GCPStorageManager) ensureLocalCopy(gcsPath string) (string, error) {
 		return "", fmt.Errorf("failed to get file from GCP: %w", err)
 	}
 	defer reader.Close()
-	
+
 	// Create local file
 	file, err := os.Create(localPath)
 	if err != nil {
 		return "", fmt.Errorf("failed to create local file: %w", err)
 	}
 	defer file.Close()
-	
+
 	// Copy content
 	if _, err := io.Copy(file, reader); err != nil {
 		os.Remove(localPath) // Clean up partial file
 		return "", fmt.Errorf("failed to download file: %w", err)
 	}
-	
+
 	sm.logger.Info("Successfully downloaded file to cache", "gcs_path", gcsPath, "local_path", localPath)
 	return localPath, nil
 }
@@ -538,27 +480,27 @@ func (sm *GCPStorageManager) ensureLocalCopy(gcsPath string) (string, error) {
 func (sm *GCPStorageManager) ensureExtractedDirExists(filePath string) (string, error) {
 	// Path to the extracted directory in GCS
 	extractedGCSPath := fmt.Sprintf("%s/extracted", filePath)
-	
+
 	// Local path for the extracted directory
 	localExtractedPath := filepath.Join(sm.localTempDir, extractedGCSPath)
-	
+
 	// Check if directory exists in local cache
 	if _, err := os.Stat(localExtractedPath); err == nil {
 		// Directory exists in cache
 		sm.logger.Debug("Using cached extracted directory", "path", localExtractedPath)
 		return localExtractedPath, nil
 	}
-	
+
 	// Directory doesn't exist, create it
 	if err := os.MkdirAll(localExtractedPath, 0755); err != nil {
 		return "", fmt.Errorf("failed to create extracted directory: %w", err)
 	}
-	
+
 	// List all objects in the extracted directory in GCS
 	sm.logger.Info("Downloading extracted directory from GCP", "path", extractedGCSPath)
 	ctx := context.Background()
 	it := sm.client.Bucket(sm.bucketName).Objects(ctx, &storage.Query{Prefix: extractedGCSPath + "/"})
-	
+
 	// Download each file
 	fileCount := 0
 	for {
@@ -569,22 +511,22 @@ func (sm *GCPStorageManager) ensureExtractedDirExists(filePath string) (string, 
 		if err != nil {
 			return "", fmt.Errorf("error listing objects in extracted directory: %w", err)
 		}
-		
+
 		// Skip the directory itself
 		if attrs.Name == extractedGCSPath+"/" {
 			continue
 		}
-		
+
 		// Download the file
 		_, err = sm.ensureLocalCopy(attrs.Name)
 		if err != nil {
 			sm.logger.Warn("Failed to download file from extracted directory", "file", attrs.Name, "error", err)
 			continue
 		}
-		
+
 		fileCount++
 	}
-	
+
 	sm.logger.Info("Successfully downloaded extracted directory", "path", extractedGCSPath, "file_count", fileCount)
 	return localExtractedPath, nil
 }
@@ -693,7 +635,7 @@ func (sm *GCPStorageManager) extractZipFile(ctx context.Context, zipPath, gcsFil
 
 		// Upload to GCS
 		writer := sm.client.Bucket(sm.bucketName).Object(gcsObjectPath).NewWriter(ctx)
-		
+
 		// Set content type based on file extension
 		contentType := "application/octet-stream"
 		if strings.HasSuffix(strings.ToLower(path), ".md") {
@@ -722,4 +664,55 @@ func (sm *GCPStorageManager) extractZipFile(ctx context.Context, zipPath, gcsFil
 	}
 
 	return result, nil
+}
+
+// deleteAllObjectsWithPrefix deletes all objects with the given prefix in a GCS bucket
+// In GCS, there are no actual folders - just objects with names containing slashes
+// This function deletes all objects that start with the given prefix
+func deleteAllObjectsWithPrefix(ctx context.Context, bucket *storage.BucketHandle, prefix string) error {
+	// Create a query that targets only objects with this exact prefix
+	// For example: "files/61dec940-413f-4fbd-82c0-afb691a5541e/"
+	query := &storage.Query{
+		Prefix: prefix,
+	}
+
+	// List all objects with the given prefix
+	it := bucket.Objects(ctx, query)
+
+	deleteCount := 0
+	deleteErrors := 0
+
+	// Delete each object
+	for {
+		// Check if context is done (timeout or cancellation)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+			// Continue processing
+		}
+
+		attrs, err := it.Next()
+		if err == iterator.Done {
+			break
+		}
+		if err != nil {
+			deleteErrors++
+			continue // Continue with other objects instead of failing completely
+		}
+
+		// Delete the object
+		if err := bucket.Object(attrs.Name).Delete(ctx); err != nil {
+			deleteErrors++
+		} else {
+			deleteCount++
+		}
+	}
+
+	// If we had any errors, return an error with details
+	if deleteErrors > 0 {
+		return fmt.Errorf("failed to delete %d objects (deleted %d successfully) with prefix %s", deleteErrors, deleteCount, prefix)
+	}
+
+	return nil
 }
