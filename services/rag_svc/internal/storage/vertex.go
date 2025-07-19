@@ -8,6 +8,7 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"cloud.google.com/go/aiplatform/apiv1/aiplatformpb"
@@ -196,6 +197,7 @@ func (s *VectorStore) FindSimilarChunks(ctx context.Context, queryEmbedding []fl
 	
 	// Create the request URL using the specific API endpoint
 	url := fmt.Sprintf("https://%s/v1/%s:findNeighbors", apiEndpoint, s.indexEndpointPath)
+	log.Printf("Sending request to URL: %s", url)
 
 	// Create the request body
 	reqBody := map[string]interface{}{
@@ -209,6 +211,21 @@ func (s *VectorStore) FindSimilarChunks(ctx context.Context, queryEmbedding []fl
 			},
 		},
 	}
+
+	// Log the request body (without the full embedding vector to avoid log spam)
+	reqBodyForLog := map[string]interface{}{
+		"deployed_index_id": reqBody["deployed_index_id"],
+		"queries": []map[string]interface{}{
+			{
+				"datapoint": map[string]interface{}{
+					"feature_vector": []float32{queryEmbedding[0], queryEmbedding[1], queryEmbedding[2]},
+					"feature_vector_length": len(queryEmbedding),
+				},
+				"neighbor_count": limit,
+			},
+		},
+	}
+	log.Printf("Request body: %+v", reqBodyForLog)
 
 	// Marshal the request body to JSON
 	jsonData, err := json.Marshal(reqBody)
@@ -225,6 +242,17 @@ func (s *VectorStore) FindSimilarChunks(ctx context.Context, queryEmbedding []fl
 	// Set headers
 	req.Header.Set("Content-Type", "application/json")
 
+	// Log the request headers
+	headers := make(map[string]string)
+	for k, v := range req.Header {
+		headers[k] = strings.Join(v, ", ")
+	}
+	log.Printf("Request headers: %+v", headers)
+
+	// Log the request start time
+	startTime := time.Now()
+	log.Printf("Sending request to Vertex AI Vector Search API...")
+
 	// Execute the request
 	response, err := s.httpClient.Do(req)
 	if err != nil {
@@ -232,10 +260,27 @@ func (s *VectorStore) FindSimilarChunks(ctx context.Context, queryEmbedding []fl
 	}
 	defer response.Body.Close()
 
+	// Log the response status and headers
+	log.Printf("Response status: %s (%d)", response.Status, response.StatusCode)
+	log.Printf("Response headers: %+v", response.Header)
+
 	// Read the response body
 	respBody, err := ioutil.ReadAll(response.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response body: %v", err)
+	}
+
+	// Log the response time and size
+	duration := time.Since(startTime)
+	log.Printf("Request completed in %v, response size: %d bytes", duration, len(respBody))
+
+	// Log the response body (truncated if too large)
+	maxBodyLogSize := 1000
+	respBodyStr := string(respBody)
+	if len(respBodyStr) > maxBodyLogSize {
+		log.Printf("Response body (truncated): %s...", respBodyStr[:maxBodyLogSize])
+	} else {
+		log.Printf("Response body: %s", respBodyStr)
 	}
 
 	// Check for non-200 status code
