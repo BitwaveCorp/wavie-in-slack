@@ -23,14 +23,14 @@ type ConversationMessage struct {
 }
 
 type GPTRequest struct {
-	Message            string               `json:"message"`
-	UserID             string               `json:"user_id"`
-	ChannelID          string               `json:"channel_id"`
-	MessageTS          string               `json:"message_ts"`
-	ThreadTS           string               `json:"thread_ts,omitempty"`
+	Message             string                `json:"message"`
+	UserID              string                `json:"user_id"`
+	ChannelID           string                `json:"channel_id"`
+	MessageTS           string                `json:"message_ts"`
+	ThreadTS            string                `json:"thread_ts,omitempty"`
 	ConversationHistory []ConversationMessage `json:"conversation_history,omitempty"`
-	CorrelationID      string               `json:"correlation_id"`
-	AgentID            string               `json:"agent_id,omitempty"`
+	CorrelationID       string                `json:"correlation_id"`
+	AgentID             string                `json:"agent_id,omitempty"`
 }
 
 type GPTResponse struct {
@@ -110,14 +110,14 @@ func (h *Handler) handleChatCompletion(w http.ResponseWriter, r *http.Request) {
 
 	// Add knowledge context if available
 	var knowledgeContext string
-	
+
 	// First try to get context from RAG service if enabled
 	var ragContext string
 	if h.ragConfig != nil && h.ragConfig.Enabled && h.ragConfig.URL != "" {
-		h.logger.Info("Retrieving context from RAG service", 
-			"agent_id", agentID, 
+		h.logger.Info("Retrieving context from RAG service",
+			"agent_id", agentID,
 			"rag_url", h.ragConfig.URL)
-		
+
 		// Create request payload
 		reqBody, err := json.Marshal(map[string]string{
 			"question": req.Message,
@@ -128,46 +128,58 @@ func (h *Handler) handleChatCompletion(w http.ResponseWriter, r *http.Request) {
 			// Send to RAG service
 			start := time.Now()
 			resp, err := http.Post(
-				h.ragConfig.URL + "/api/ask",
+				h.ragConfig.URL+"/api/ask",
 				"application/json",
 				bytes.NewBuffer(reqBody),
 			)
 			retrievalTime := time.Since(start)
-			
+
 			if err != nil {
 				h.logger.Error("Failed to send query to RAG service", "error", err)
 			} else {
 				defer resp.Body.Close()
-				
+
 				// Check response
 				if resp.StatusCode != http.StatusOK {
 					respBody, _ := io.ReadAll(resp.Body)
-					h.logger.Error("RAG service returned error", 
-						"status", resp.Status,
-						"response", string(respBody))
+					respBodyStr := string(respBody)
+					
+					// Special handling for 501 Not Implemented error from Vertex AI Vector Search
+					if resp.StatusCode == http.StatusInternalServerError && 
+					   strings.Contains(respBodyStr, "501") && 
+					   strings.Contains(respBodyStr, "UNIMPLEMENTED") {
+						h.logger.Warn("RAG service vector search not implemented or enabled", 
+							"status", resp.Status,
+							"response", respBodyStr,
+							"fallback", "Using traditional knowledge retrieval")
+					} else {
+						h.logger.Error("RAG service returned error",
+							"status", resp.Status,
+							"response", respBodyStr)
+					}
 				} else {
 					// Parse response
 					var ragResp struct {
 						Chunks []struct {
-							Content string `json:"content"`
+							Content string  `json:"content"`
 							Score   float64 `json:"score"`
 						} `json:"chunks"`
 					}
-					
+
 					if err := json.NewDecoder(resp.Body).Decode(&ragResp); err != nil {
 						h.logger.Error("Failed to decode RAG response", "error", err)
 					} else if len(ragResp.Chunks) > 0 {
 						// Build context from chunks
 						var builder strings.Builder
 						builder.WriteString("# Relevant Context\n\n")
-						
+
 						for i, chunk := range ragResp.Chunks {
-							builder.WriteString(fmt.Sprintf("## Document %d (Score: %.2f)\n\n%s\n\n", 
+							builder.WriteString(fmt.Sprintf("## Document %d (Score: %.2f)\n\n%s\n\n",
 								i+1, chunk.Score, chunk.Content))
 						}
-						
+
 						ragContext = builder.String()
-						h.logger.Info("Successfully retrieved context from RAG service", 
+						h.logger.Info("Successfully retrieved context from RAG service",
 							"chunk_count", len(ragResp.Chunks),
 							"context_length", len(ragContext),
 							"retrieval_time_ms", retrievalTime.Milliseconds())
@@ -178,37 +190,37 @@ func (h *Handler) handleChatCompletion(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	
+
 	// Then try traditional knowledge retrieval if RAG didn't provide context
 	if ragContext == "" && h.knowledge != nil {
-		h.logger.Info("Retrieving knowledge context for agent", 
-			"agent_id", agentID, 
+		h.logger.Info("Retrieving knowledge context for agent",
+			"agent_id", agentID,
 			"storage_type", h.knowledge.GetStorageBackendType())
-		
+
 		start := time.Now()
 		context, err := h.knowledge.GetKnowledgeContext(agentID)
 		retrievalTime := time.Since(start)
-		
+
 		if err != nil {
-			h.logger.Warn("Failed to get knowledge context", 
-				"error", err, 
-				"agent_id", agentID, 
+			h.logger.Warn("Failed to get knowledge context",
+				"error", err,
+				"agent_id", agentID,
 				"storage_type", h.knowledge.GetStorageBackendType())
 		} else if context != "" {
 			knowledgeContext = context
-			h.logger.Info("Successfully retrieved knowledge context", 
-				"agent_id", agentID, 
+			h.logger.Info("Successfully retrieved knowledge context",
+				"agent_id", agentID,
 				"storage_type", h.knowledge.GetStorageBackendType(),
 				"context_length", len(knowledgeContext),
 				"retrieval_time_ms", retrievalTime.Milliseconds(),
 				"feeding_to_claude", true)
 		} else {
-			h.logger.Info("No knowledge context available for agent", 
-				"agent_id", agentID, 
+			h.logger.Info("No knowledge context available for agent",
+				"agent_id", agentID,
 				"storage_type", h.knowledge.GetStorageBackendType())
 		}
 	}
-	
+
 	// Use RAG context if available, otherwise use knowledge context
 	if ragContext != "" {
 		knowledgeContext = ragContext
@@ -264,7 +276,7 @@ func convertToOpenAIMessages(messages []ConversationMessage) []openai.Message {
 func (h *Handler) handleFeedbackMessage(w http.ResponseWriter, req GPTRequest) bool {
 	// Check if this is a reaction feedback message
 	if req.Message == "FEEDBACK_REACTION:closed_book" {
-		h.logger.Info("Processing reaction feedback message", 
+		h.logger.Info("Processing reaction feedback message",
 			"correlation_id", req.CorrelationID,
 			"user_id", req.UserID,
 			"channel_id", req.ChannelID,
@@ -290,7 +302,7 @@ func (h *Handler) handleFeedbackMessage(w http.ResponseWriter, req GPTRequest) b
 	// Check for text feedback messages with FEEDBACK_TEXT: prefix
 	if strings.HasPrefix(req.Message, "FEEDBACK_TEXT:") {
 		feedbackText := strings.TrimPrefix(req.Message, "FEEDBACK_TEXT:")
-		h.logger.Info("Processing text feedback message", 
+		h.logger.Info("Processing text feedback message",
 			"correlation_id", req.CorrelationID,
 			"user_id", req.UserID,
 			"channel_id", req.ChannelID,
@@ -316,7 +328,7 @@ func (h *Handler) handleFeedbackMessage(w http.ResponseWriter, req GPTRequest) b
 
 	// Also check for legacy text feedback messages that start with ***
 	if len(req.Message) > 3 && req.Message[:3] == "***" {
-		h.logger.Info("Processing legacy detailed feedback message", 
+		h.logger.Info("Processing legacy detailed feedback message",
 			"correlation_id", req.CorrelationID,
 			"user_id", req.UserID,
 			"channel_id", req.ChannelID,
