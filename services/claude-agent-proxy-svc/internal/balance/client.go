@@ -51,7 +51,7 @@ func (c *Client) GetBalance(ctx context.Context, chain, address, tokenContract s
 	// Build the URL according to the working curl command format
 	url := fmt.Sprintf("%s/api/v1/chains/%s/addresses/%s/balance", c.baseURL, chain, address)
 	if tokenContract != "" {
-		url = fmt.Sprintf("%s?token=%s", url, tokenContract)
+		url = fmt.Sprintf("%s?type=token&contractaddress=%s", url, tokenContract)
 	}
 
 	log.Printf("Sending balance request to: %s", url)
