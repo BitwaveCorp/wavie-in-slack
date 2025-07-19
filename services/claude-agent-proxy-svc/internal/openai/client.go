@@ -136,6 +136,27 @@ func (c *Client) ChatCompletionWithHistory(ctx context.Context, userMessage stri
 	return c.sendChatRequest(ctx, messages, correlationID)
 }
 
+// ChatMessage represents a message in a chat conversation
+type ChatMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+// CreateChatCompletion sends a chat completion request with the given messages and temperature
+func (c *Client) CreateChatCompletion(ctx context.Context, messages []ChatMessage, temperature float64) (string, error) {
+	// Convert messages to the format expected by sendChatRequest
+	var convertedMessages []Message
+	for _, msg := range messages {
+		convertedMessages = append(convertedMessages, Message{
+			Role:    msg.Role,
+			Content: msg.Content,
+		})
+	}
+
+	// Use the existing sendChatRequest method
+	return c.sendChatRequest(ctx, convertedMessages, "")
+}
+
 // sendChatRequest handles the actual API call to Claude API
 func (c *Client) sendChatRequest(ctx context.Context, messages []Message, correlationID string) (string, error) {
 

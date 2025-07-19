@@ -1,0 +1,302 @@
+# Go Wallet Balance Service Integration Guide
+
+## Service Overview
+The wallet balance service is deployed at: `https://walletbalanceservice-455488113475.us-central1.run.app`
+
+## Endpoint Pattern
+```
+GET /api/v1/chains/{chain}/addresses/{address}/balance
+```
+
+## Supported Chains
+
+### EVM-Compatible Chains (Etherscan-based)
+- `ethereum` - Ethereum mainnet (ETH)
+- `arbitrum` - Arbitrum One (ETH)
+- `polygon` - Polygon/Matic (MATIC)
+- `bsc` - Binance Smart Chain (BNB)
+- `fantom` - Fantom Opera (FTM)
+- `optimism` - Optimism mainnet (ETH)
+- `base` - Base mainnet (ETH)
+
+### Other EVM Chains
+- `avalanche_c` - Avalanche C-Chain (AVAX)
+- `gnosis` - Gnosis Chain (xDAI)
+- `celo` - Celo mainnet (CELO)
+- `aurora` - Aurora mainnet (ETH)
+- `blast` - Blast mainnet (ETH)
+
+### Bitcoin & UTXO Chains
+- `bitcoin` - Bitcoin mainnet (BTC)
+- `litecoin` - Litecoin mainnet (LTC)
+
+### Cosmos Ecosystem
+- `evmos` - Evmos (EVMOS)
+- `umee` - Umee (UMEE)
+- `kyve` - KYVE (KYVE)
+- `persistence` - Persistence (XPRT)
+- `axelar` - Axelar (AXL)
+- `celestia` - Celestia (TIA)
+- `kava` - Kava (KAVA)
+- `agoric` - Agoric (BLD)
+- `akash` - Akash (AKT)
+- `regen` - Regen Network (REGEN)
+- `provenance` - Provenance (HASH)
+- `osmosis` - Osmosis (OSMO)
+
+### Other Chains
+- `stellar` - Stellar (XLM)
+- `hedera` - Hedera (HBAR)
+- `cardano` - Cardano (ADA)
+- `near` - NEAR Protocol (NEAR)
+- `stacks` - Stacks (STX)
+- `filecoin` - Filecoin (FIL)
+- `deso` - DeSo (DESO)
+- `sui` - Sui (SUI)
+- `arweave` - Arweave (AR)
+- `kusama` - Kusama (KSM)
+- `polkadot` - Polkadot (DOT)
+
+## Go Structs for Response Handling
+
+```go
+package main
+
+import (
+    "encoding/json"
+    "fmt"
+    "net/http"
+    "time"
+)
+
+// StandardResponse represents the top-level API response
+type StandardResponse struct {
+    Success bool        `json:"success"`
+    Data    *BalanceData `json:"data,omitempty"`
+    Errors  []string    `json:"errors,omitempty"`
+}
+
+// BalanceData represents the balance information
+type BalanceData struct {
+    Ticker        string      `json:"Ticker"`
+    Amount        string      `json:"Amount"`          // Always returned as string to preserve precision
+    WalletId      string      `json:"WalletId"`        // Format: "bitwave-wallet-id-{first8chars}"
+    RemoteWalletId string     `json:"RemoteWalletId"`  // Original wallet address
+    BlockId       string      `json:"BlockId"`         // Block number or "0"
+    TimestampSEC  string      `json:"TimestampSEC"`    // Unix timestamp as string
+    RawMetadata   RawMetadata `json:"RawMetadata"`
+}
+
+// RawMetadata contains source information and raw API response
+type RawMetadata struct {
+    Source      string      `json:"source"`       // e.g., "Etherscan API", "Bitcoin Blockchain.info API"
+    Chain       string      `json:"chain"`        // Chain name, capitalized
+    RawResponse interface{} `json:"raw_response"` // Original API response (varies by provider)
+}
+```
+
+## Example Usage in Go
+
+```go
+package main
+
+import (
+    "encoding/json"
+    "fmt"
+    "net/http"
+    "strconv"
+    "time"
+)
+
+const BaseURL = "https://walletbalanceservice-455488113475.us-central1.run.app"
+
+// WalletBalanceClient handles API calls to the wallet balance service
+type WalletBalanceClient struct {
+    httpClient *http.Client
+    baseURL    string
+}
+
+// NewWalletBalanceClient creates a new client instance
+func NewWalletBalanceClient() *WalletBalanceClient {
+    return &WalletBalanceClient{
+        httpClient: &http.Client{Timeout: 30 * time.Second},
+        baseURL:    BaseURL,
+    }
+}
+
+// GetBalance fetches balance for a given chain and address
+func (c *WalletBalanceClient) GetBalance(chain, address string) (*BalanceData, error) {
+    url := fmt.Sprintf("%s/api/v1/chains/%s/addresses/%s/balance", c.baseURL, chain, address)
+    
+    resp, err := c.httpClient.Get(url)
+    if err != nil {
+        return nil, fmt.Errorf("HTTP request failed: %w", err)
+    }
+    defer resp.Body.Close()
+    
+    var response StandardResponse
+    if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+        return nil, fmt.Errorf("failed to decode response: %w", err)
+    }
+    
+    if !response.Success {
+        return nil, fmt.Errorf("API returned error: %v", response.Errors)
+    }
+    
+    return response.Data, nil
+}
+
+// GetTokenBalance fetches ERC-20/BEP-20 token balance (for EVM chains only)
+func (c *WalletBalanceClient) GetTokenBalance(chain, address, tokenContract string) (*BalanceData, error) {
+    url := fmt.Sprintf("%s/api/v1/chains/%s/addresses/%s/balance?type=token&contractaddress=%s", 
+        c.baseURL, chain, address, tokenContract)
+    
+    resp, err := c.httpClient.Get(url)
+    if err != nil {
+        return nil, fmt.Errorf("HTTP request failed: %w", err)
+    }
+    defer resp.Body.Close()
+    
+    var response StandardResponse
+    if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+        return nil, fmt.Errorf("failed to decode response: %w", err)
+    }
+    
+    if !response.Success {
+        return nil, fmt.Errorf("API returned error: %v", response.Errors)
+    }
+    
+    return response.Data, nil
+}
+
+// Helper function to convert balance string to float64
+func (b *BalanceData) GetAmountFloat() (float64, error) {
+    return strconv.ParseFloat(b.Amount, 64)
+}
+
+// Helper function to get timestamp as time.Time
+func (b *BalanceData) GetTimestamp() (time.Time, error) {
+    timestamp, err := strconv.ParseInt(b.TimestampSEC, 10, 64)
+    if err != nil {
+        return time.Time{}, err
+    }
+    return time.Unix(timestamp, 0), nil
+}
+```
+
+## Example Usage
+
+```go
+func main() {
+    client := NewWalletBalanceClient()
+    
+    // Example 1: Get Ethereum balance
+    ethBalance, err := client.GetBalance("ethereum", "0x742C4B3C2aA1A3f6B62e01B4eFFb1C62F59BE8c4")
+    if err != nil {
+        fmt.Printf("Error getting ETH balance: %v\n", err)
+        return
+    }
+    fmt.Printf("ETH Balance: %s %s\n", ethBalance.Amount, ethBalance.Ticker)
+    
+    // Example 2: Get Bitcoin balance
+    btcBalance, err := client.GetBalance("bitcoin", "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa")
+    if err != nil {
+        fmt.Printf("Error getting BTC balance: %v\n", err)
+        return
+    }
+    fmt.Printf("BTC Balance: %s %s\n", btcBalance.Amount, btcBalance.Ticker)
+    
+    // Example 3: Get ERC-20 token balance (USDC on Ethereum)
+    usdcBalance, err := client.GetTokenBalance("ethereum", "0x742C4B3C2aA1A3f6B62e01B4eFFb1C62F59BE8c4", "0xA0b86a33E6441d8D7fd24b5D7B0C6F72b7F66f7c")
+    if err != nil {
+        fmt.Printf("Error getting USDC balance: %v\n", err)
+        return
+    }
+    fmt.Printf("USDC Balance: %s\n", usdcBalance.Amount)
+}
+```
+
+## Response Examples
+
+### Successful Response
+```json
+{
+  "success": true,
+  "data": {
+    "Ticker": "ETH",
+    "Amount": "1.234567890123456789",
+    "WalletId": "bitwave-wallet-id-0x742C4B",
+    "RemoteWalletId": "0x742C4B3C2aA1A3f6B62e01B4eFFb1C62F59BE8c4",
+    "BlockId": "18750000",
+    "TimestampSEC": "1642780800",
+    "RawMetadata": {
+      "source": "Etherscan API",
+      "chain": "Ethereum",
+      "raw_response": {
+        "status": "1",
+        "message": "OK",
+        "result": "1234567890123456789"
+      }
+    }
+  }
+}
+```
+
+### Error Response
+```json
+{
+  "success": false,
+  "errors": ["Invalid address format"]
+}
+```
+
+## Important Notes
+
+1. **Amount Precision**: Always use `string` type for the `Amount` field to preserve full precision, especially for cryptocurrencies with high decimal places.
+
+2. **Rate Limiting**: The service has built-in rate limiting. Implement exponential backoff for 429 responses.
+
+3. **Address Formats**: Each blockchain has different address formats:
+   - Ethereum/EVM: `0x` prefixed hex (42 characters)
+   - Bitcoin: Legacy (`1...`), SegWit (`3...`), or Bech32 (`bc1...`)
+   - Cardano: `addr1...`
+   - Stellar: 56-character alphanumeric starting with `G`
+
+4. **Token Queries**: Only EVM-compatible chains support the `type=token&contractaddress=` parameters.
+
+5. **Error Handling**: Always check the `success` field before accessing `data`. The `errors` array will contain human-readable error messages.
+
+6. **Timestamp Conversion**: The `TimestampSEC` is a Unix timestamp as a string - convert to `int64` then to `time.Time`.
+
+## Batch Processing Pattern
+
+```go
+func (c *WalletBalanceClient) GetMultipleBalances(requests []BalanceRequest) []BalanceResult {
+    var results []BalanceResult
+    
+    for _, req := range requests {
+        balance, err := c.GetBalance(req.Chain, req.Address)
+        results = append(results, BalanceResult{
+            Request: req,
+            Balance: balance,
+            Error:   err,
+        })
+        
+        // Add small delay to respect rate limits
+        time.Sleep(100 * time.Millisecond)
+    }
+    
+    return results
+}
+
+type BalanceRequest struct {
+    Chain   string
+    Address string
+}
+
+type BalanceResult struct {
+    Request BalanceRequest
+    Balance *BalanceData
+    Error   error
+}
+```

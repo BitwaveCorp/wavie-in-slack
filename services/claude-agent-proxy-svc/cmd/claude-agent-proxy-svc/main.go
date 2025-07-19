@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/BitwaveCorp/slack-wavie-bot-system-upgraded/services/claude-agent-proxy-svc/internal/api"
+	"github.com/BitwaveCorp/slack-wavie-bot-system-upgraded/services/claude-agent-proxy-svc/internal/balance"
 	"github.com/BitwaveCorp/slack-wavie-bot-system-upgraded/services/claude-agent-proxy-svc/internal/config"
 	"github.com/BitwaveCorp/slack-wavie-bot-system-upgraded/services/claude-agent-proxy-svc/internal/knowledge"
 	"github.com/BitwaveCorp/slack-wavie-bot-system-upgraded/services/claude-agent-proxy-svc/internal/openai"
@@ -179,7 +180,10 @@ func main() {
 	}
 
 	claudeClient := openai.NewClient(cfg.ClaudeAPIKey, cfg.ClaudeModel, logger)
-	handler := api.NewHandler(claudeClient, logger, knowledgeRetriever, &cfg.RAG)
+	balanceSvc := balance.NewClient(cfg.BalanceServiceURL)
+
+	// Initialize the API handler
+	handler := api.NewHandler(claudeClient, logger, knowledgeRetriever, &cfg.RAG, balanceSvc)
 
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux)
