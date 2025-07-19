@@ -274,9 +274,9 @@ func (s *Server) handleAskQuestion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Return the chunks (in a real implementation, you would send these to Claude)
+	// Return the similar chunks
 	response := models.QuestionResponse{
-		Answer:       "This is a placeholder. In production, these chunks would be sent to Claude for processing.",
+		Answer:       "Here are the most relevant document chunks for your question:",
 		SourceChunks: similarChunks,
 	}
 

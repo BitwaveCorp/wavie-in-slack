@@ -160,27 +160,24 @@ func (h *Handler) handleChatCompletion(w http.ResponseWriter, r *http.Request) {
 				} else {
 					// Parse response
 					var ragResp struct {
-						Chunks []struct {
-							Content string  `json:"content"`
-							Score   float64 `json:"score"`
-						} `json:"chunks"`
+						Answer       string   `json:"answer"`
+						SourceChunks []string `json:"source_chunks"`
 					}
 
 					if err := json.NewDecoder(resp.Body).Decode(&ragResp); err != nil {
 						h.logger.Error("Failed to decode RAG response", "error", err)
-					} else if len(ragResp.Chunks) > 0 {
-						// Build context from chunks
+					} else if len(ragResp.SourceChunks) > 0 {
+						// Build context from source chunks
 						var builder strings.Builder
-						builder.WriteString("# Relevant Context\n\n")
+						builder.WriteString("# " + ragResp.Answer + "\n\n")
 
-						for i, chunk := range ragResp.Chunks {
-							builder.WriteString(fmt.Sprintf("## Document %d (Score: %.2f)\n\n%s\n\n",
-								i+1, chunk.Score, chunk.Content))
+						for i, chunk := range ragResp.SourceChunks {
+							builder.WriteString(fmt.Sprintf("## Document %d\n\n%s\n\n", i+1, chunk))
 						}
 
 						ragContext = builder.String()
 						h.logger.Info("Successfully retrieved context from RAG service",
-							"chunk_count", len(ragResp.Chunks),
+							"chunk_count", len(ragResp.SourceChunks),
 							"context_length", len(ragContext),
 							"retrieval_time_ms", retrievalTime.Milliseconds())
 					} else {
