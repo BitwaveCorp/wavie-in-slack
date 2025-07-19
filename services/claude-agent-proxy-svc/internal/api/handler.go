@@ -208,7 +208,7 @@ Now analyze this message (respond with only the JSON object, no other text or fo
 	// Log the detected query
 	h.logger.Info("Claude detected a balance query", 
 		"chain", query.Chain, 
-		"address", safeTruncate(query.Address, 6, 4),
+		"address", query.Address,
 		"has_token_contract", query.TokenContract != "")
 
 	return &query, true
