@@ -120,7 +120,7 @@ func (h *Handler) handleChatCompletion(w http.ResponseWriter, r *http.Request) {
 		
 		// Create request payload
 		reqBody, err := json.Marshal(map[string]string{
-			"query": req.Message,
+			"question": req.Message,
 		})
 		if err != nil {
 			h.logger.Error("Failed to marshal RAG ask request", "error", err)
