@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"log"
 	"net/http"
 	"time"
 )
@@ -46,49 +48,76 @@ func NewClient(baseURL string) *Client {
 }
 
 func (c *Client) GetBalance(ctx context.Context, chain, address, tokenContract string) (*BalanceData, error) {
-	payload := map[string]interface{}{
-		"type":    "balance_query",
-		"chain":   chain,
-		"address": address,
-	}
-
+	// Build the URL according to the working curl command format
+	url := fmt.Sprintf("%s/api/v1/chains/%s/addresses/%s/balance", c.baseURL, chain, address)
 	if tokenContract != "" {
-		payload["token_contract"] = tokenContract
+		url = fmt.Sprintf("%s?token=%s", url, tokenContract)
 	}
 
-	jsonData, err := json.Marshal(payload)
+	log.Printf("Sending balance request to: %s", url)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request: %w", err)
+		err = fmt.Errorf("failed to create request: %w", err)
+		log.Printf("Error creating request: %v", err)
+		return nil, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/pull", bytes.NewBuffer(jsonData))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
 
+	// Log request details
+	headers, _ := json.Marshal(req.Header)
+	log.Printf("Request headers: %s", string(headers))
+
+	// Send the request
+	start := time.Now()
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("request failed: %w", err)
+		err = fmt.Errorf("failed to send request: %w", err)
+		log.Printf("Error sending request: %v", err)
+		return nil, err
 	}
 	defer resp.Body.Close()
 
+	// Read response body for logging
+	body, _ := io.ReadAll(resp.Body)
+	// Create a new reader for the response body since we've already read it
+	resp.Body = io.NopCloser(bytes.NewBuffer(body))
+
+	log.Printf("Balance service response - Status: %d, Duration: %v, Headers: %v, Body: %s",
+		resp.StatusCode,
+		time.Since(start),
+		resp.Header,
+		string(body),
+	)
+
+	// Check status code
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+		err = fmt.Errorf("unexpected status code: %d, response: %s", resp.StatusCode, string(body))
+		log.Printf("Error response from balance service: %v", err)
+		return nil, err
 	}
 
+	// Parse the response
 	var balanceResp BalanceResponse
-	if err := json.NewDecoder(resp.Body).Decode(&balanceResp); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
+	if err := json.NewDecoder(bytes.NewReader(body)).Decode(&balanceResp); err != nil {
+		err = fmt.Errorf("failed to decode response: %w, response body: %s", err, string(body))
+		log.Printf("Error decoding response: %v", err)
+		return nil, err
 	}
 
 	if !balanceResp.Success {
-		return nil, fmt.Errorf("balance service error: %v", balanceResp.Errors)
+		err = fmt.Errorf("balance service error: %v", balanceResp.Errors)
+		log.Printf("Balance service returned error: %v", err)
+		return nil, err
 	}
 
 	if balanceResp.Data == nil {
-		return nil, fmt.Errorf("no data in response")
+		err = fmt.Errorf("no data in response")
+		log.Printf("No data in balance response")
+		return nil, err
 	}
 
+	log.Printf("Successfully retrieved balance: %+v", balanceResp.Data)
 	return balanceResp.Data, nil
 }
