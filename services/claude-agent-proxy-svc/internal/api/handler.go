@@ -250,7 +250,17 @@ func (h *Handler) handleBalanceQuery(w http.ResponseWriter, r *http.Request, que
 	// Format the address for display
 	displayAddress := query.Address
 	if len(displayAddress) > 10 {
-		displayAddress = displayAddress[:6] + "..." + displayAddress[len(displayAddress)-4:]
+		// Safely truncate the address
+		startLen := 6
+		endLen := 4
+		
+		// Make sure we don't try to take more characters than available
+		if len(displayAddress) < startLen + endLen {
+			// If address is too short, just use it as is
+			// This should never happen due to the len > 10 check above, but adding as a safeguard
+		} else {
+			displayAddress = displayAddress[:startLen] + "..." + displayAddress[len(displayAddress)-endLen:]
+		}
 	}
 
 	// Format the response
