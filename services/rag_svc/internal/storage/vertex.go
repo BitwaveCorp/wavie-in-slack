@@ -320,10 +320,12 @@ func (s *VectorStore) FindSimilarChunks(ctx context.Context, queryEmbedding []fl
 	var resp struct {
 		NearestNeighbors []struct {
 			Neighbors []struct {
-				DatapointId string  `json:"datapoint_id"`
-				Distance    float64 `json:"distance"`
+				Datapoint struct {
+					DatapointId string `json:"datapointId"`
+				} `json:"datapoint"`
+				Distance float64 `json:"distance"`
 			} `json:"neighbors"`
-		} `json:"nearest_neighbors"`
+		} `json:"nearestNeighbors"`
 	}
 
 	if err := json.Unmarshal(respBody, &resp); err != nil {
@@ -334,9 +336,14 @@ func (s *VectorStore) FindSimilarChunks(ctx context.Context, queryEmbedding []fl
 	var chunkIDs []string
 
 	if len(resp.NearestNeighbors) > 0 && len(resp.NearestNeighbors[0].Neighbors) > 0 {
-		for _, neighbor := range resp.NearestNeighbors[0].Neighbors {
-			chunkIDs = append(chunkIDs, neighbor.DatapointId)
+		log.Printf("Found %d neighbors in response", len(resp.NearestNeighbors[0].Neighbors))
+		for i, neighbor := range resp.NearestNeighbors[0].Neighbors {
+			chunkID := neighbor.Datapoint.DatapointId
+			log.Printf("Neighbor %d: ID=%s, Distance=%.4f", i+1, chunkID, neighbor.Distance)
+			chunkIDs = append(chunkIDs, chunkID)
 		}
+	} else {
+		log.Println("No neighbors found in response")
 	}
 
 	// Retrieve chunks from Firestore
