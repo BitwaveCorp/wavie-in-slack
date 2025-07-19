@@ -1,4 +1,4 @@
-# Go Wallet Balance Service Integration Guide
+# Wallet Balance Service Integration Guide
 
 ## Service Overview
 The wallet balance service is deployed at: `https://walletbalanceservice-455488113475.us-central1.run.app`

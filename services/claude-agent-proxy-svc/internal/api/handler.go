@@ -85,7 +85,16 @@ func safeTruncate(s string, start, end int) string {
 	if len(s) <= start+end {
 		return s
 	}
-	return s[:start] + "..." + s[len(s)-end:]
+	// Ensure we don't try to slice beyond the string length
+	startChars := start
+	if startChars > len(s) {
+		startChars = len(s)
+	}
+	endChars := end
+	if endChars > len(s) {
+		endChars = len(s)
+	}
+	return s[:startChars] + "..." + s[len(s)-endChars:]
 }
 
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
