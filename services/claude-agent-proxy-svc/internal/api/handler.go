@@ -283,7 +283,7 @@ func (h *Handler) handleBalanceQuery(w http.ResponseWriter, r *http.Request, que
 			strings.ToUpper(query.Chain),
 			displayAddress,
 			strings.Title(query.Chain),
-			query.TokenContract[:6] + "..." + query.TokenContract[len(query.TokenContract)-4:],
+			safeTruncate(query.TokenContract, 6, 4),
 			balance.Amount,
 			tokenName,
 			time.Now().Format("January 2, 2006 15:04:05 MST"),
@@ -389,7 +389,7 @@ func (h *Handler) handleChatCompletion(w http.ResponseWriter, r *http.Request) {
 		h.logger.Info("Detected balance query", 
 			"correlation_id", req.CorrelationID,
 			"chain", balanceQuery.Chain,
-			"address", balanceQuery.Address[:6] + "..." + balanceQuery.Address[len(balanceQuery.Address)-4:],
+			"address", safeTruncate(balanceQuery.Address, 6, 4),
 		)
 		h.handleBalanceQuery(w, r, balanceQuery, req.CorrelationID)
 		return
