@@ -19,43 +19,57 @@ import (
 
 // VectorStore handles vector storage and retrieval
 type VectorStore struct {
-	projectID       string
-	location        string
-	firestoreClient *firestore.Client
-	httpClient      *http.Client
-	indexPath        string
+	projectID         string
+	location          string
+	firestoreClient   *firestore.Client
+	httpClient        *http.Client
+	indexPath         string
 	indexEndpointPath string
-	deployedIndexID  string
+	deployedIndexID   string
 }
 
 // NewVectorStore creates a new vector store
 func NewVectorStore(ctx context.Context, projectID, location, indexID, indexEndpointID, deployedIndexID string) (*VectorStore, error) {
+	// Log the configuration parameters
+	log.Printf("Initializing VectorStore with:\n" +
+		"  Project ID: %s\n" +
+		"  Location: %s\n" +
+		"  Index ID: %s\n" +
+		"  Index Endpoint ID: %s\n" +
+		"  Deployed Index ID: %s",
+		projectID, location, indexID, indexEndpointID, deployedIndexID)
+	
+	// Use the correct deployed index ID if the provided one doesn't match the expected format
+	if deployedIndexID != "wavie_embeds_1752410897069" {
+		log.Printf("WARNING: Provided deployed index ID '%s' doesn't match the expected ID. Using 'wavie_embeds_1752410897069' instead.", deployedIndexID)
+		deployedIndexID = "wavie_embeds_1752410897069"
+	}
 	firestoreClient, err := firestore.NewClient(ctx, projectID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Firestore client: %v", err)
 	}
-	
+
 	// Create HTTP client with Google API credentials
 	credentials, err := google.FindDefaultCredentials(ctx, "https://www.googleapis.com/auth/cloud-platform")
 	if err != nil {
 		return nil, fmt.Errorf("failed to get default credentials: %v", err)
 	}
-	
+
 	tokenSource := credentials.TokenSource
 	httpClient := oauth2.NewClient(ctx, tokenSource)
-	
+
 	// Create resource paths
 	indexPath := fmt.Sprintf("projects/%s/locations/%s/indexes/%s", projectID, location, indexID)
 	indexEndpointPath := fmt.Sprintf("projects/%s/locations/%s/indexEndpoints/%s", projectID, location, indexEndpointID)
-	
+
 	return &VectorStore{
-		projectID:        projectID,
-		location:         location,
-		firestoreClient:  firestoreClient,
-		httpClient:       httpClient,
-		indexPath:        indexPath,
+		projectID:         projectID,
+		location:          location,
+		firestoreClient:   firestoreClient,
+		httpClient:        httpClient,
+		indexPath:         indexPath,
 		indexEndpointPath: indexEndpointPath,
-		deployedIndexID:  deployedIndexID,
+		deployedIndexID:   deployedIndexID,
 	}, nil
 }
 
@@ -65,7 +79,7 @@ func (s *VectorStore) Close() error {
 	if s.firestoreClient != nil {
 		return s.firestoreClient.Close()
 	}
-	
+
 	// Note: httpClient doesn't need to be closed
 	return nil
 }
@@ -74,11 +88,11 @@ func (s *VectorStore) Close() error {
 func (s *VectorStore) StoreEmbeddings(ctx context.Context, documentID string, chunks []string, embeddings [][]float32) error {
 	// 1. Store text chunks in Firestore
 	batch := s.firestoreClient.Batch()
-	
+
 	for i, chunk := range chunks {
 		chunkID := fmt.Sprintf("%s-%d", documentID, i)
 		ref := s.firestoreClient.Collection("document_chunks").Doc(chunkID)
-		
+
 		batch.Set(ref, map[string]interface{}{
 			"document_id": documentID,
 			"chunk_index": i,
@@ -86,90 +100,103 @@ func (s *VectorStore) StoreEmbeddings(ctx context.Context, documentID string, ch
 			"created_at":  time.Now(),
 		})
 	}
-	
+
 	_, err := batch.Commit(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to store chunks in Firestore: %v", err)
 	}
-	
+
 	// 2. Store vectors in Vertex AI Vector Search
 	var datapoints []*aiplatformpb.IndexDatapoint
-	
+
 	for i, embedding := range embeddings {
 		chunkID := fmt.Sprintf("%s-%d", documentID, i)
-		
+
 		// We're storing metadata in Firestore, so we don't need it in the datapoint
 		// But keeping this code commented for reference if needed in the future
 		/*
-		metadata, err := structpb.NewStruct(map[string]interface{}{
-			"document_id": documentID,
-			"chunk_index": i,
-		})
-		if err != nil {
-			return fmt.Errorf("failed to create metadata: %v", err)
-		}
+			metadata, err := structpb.NewStruct(map[string]interface{}{
+				"document_id": documentID,
+				"chunk_index": i,
+			})
+			if err != nil {
+				return fmt.Errorf("failed to create metadata: %v", err)
+			}
 		*/
-		
+
 		// Create datapoint with embedding
 		datapoint := &aiplatformpb.IndexDatapoint{
 			DatapointId:   chunkID,
 			FeatureVector: embedding,
 		}
-		
+
 		datapoints = append(datapoints, datapoint)
 	}
-	
+
 	// Create the request URL for UpsertDatapoints
-	url := fmt.Sprintf("https://%s-aiplatform.googleapis.com/v1/%s:upsertDatapoints", 
+	url := fmt.Sprintf("https://%s-aiplatform.googleapis.com/v1/%s:upsertDatapoints",
 		s.location, s.indexPath)
-	
+
 	// Create the request body
 	reqBody := map[string]interface{}{
 		"datapoints": datapoints,
 	}
-	
+
 	// Marshal the request body to JSON
 	jsonData, err := json.Marshal(reqBody)
 	if err != nil {
 		return fmt.Errorf("failed to marshal request body: %v", err)
 	}
-	
+
 	// Create the HTTP request
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return fmt.Errorf("failed to create HTTP request: %v", err)
 	}
-	
+
 	// Set headers
 	req.Header.Set("Content-Type", "application/json")
-	
+
 	// Execute the request
 	response, err := s.httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to execute HTTP request: %v", err)
 	}
 	defer response.Body.Close()
-	
+
 	// Read the response body
 	respBody, err := ioutil.ReadAll(response.Body)
 	if err != nil {
 		return fmt.Errorf("failed to read response body: %v", err)
 	}
-	
+
 	// Check for non-200 status code
 	if response.StatusCode != http.StatusOK {
 		return fmt.Errorf("API request failed with status code %d: %s", response.StatusCode, string(respBody))
 	}
-	
+
 	return nil
 }
 
 // FindSimilarChunks finds similar chunks for a query embedding
 func (s *VectorStore) FindSimilarChunks(ctx context.Context, queryEmbedding []float32, limit int) ([]string, error) {
-	// Create the request URL
-	url := fmt.Sprintf("https://%s-aiplatform.googleapis.com/v1/%s:findNeighbors", 
-		s.location, s.indexEndpointPath)
+	// Log the configuration being used
+	log.Printf("FindSimilarChunks called with configuration:\n" +
+		"  Project ID: %s\n" +
+		"  Location: %s\n" +
+		"  Index Path: %s\n" +
+		"  Index Endpoint Path: %s\n" +
+		"  Deployed Index ID: %s",
+		s.projectID, s.location, s.indexPath, s.indexEndpointPath, s.deployedIndexID)
 	
+	// Use the specific API endpoint for Vector Search
+	// Format: {numeric-id}.{region}-{project-id}.vdb.vertexai.goog
+	apiEndpoint := "1002937326.us-central1-455488113475.vdb.vertexai.goog"
+	log.Printf("Using Vector Search API endpoint: %s", apiEndpoint)
+	
+	// Create the request URL using the specific API endpoint
+	url := fmt.Sprintf("https://%s/v1/%s:findNeighbors", apiEndpoint, s.indexEndpointPath)
+
 	// Create the request body
 	reqBody := map[string]interface{}{
 		"deployed_index_id": s.deployedIndexID,
@@ -182,40 +209,68 @@ func (s *VectorStore) FindSimilarChunks(ctx context.Context, queryEmbedding []fl
 			},
 		},
 	}
-	
+
 	// Marshal the request body to JSON
 	jsonData, err := json.Marshal(reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request body: %v", err)
 	}
-	
+
 	// Create the HTTP request
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create HTTP request: %v", err)
 	}
-	
+
 	// Set headers
 	req.Header.Set("Content-Type", "application/json")
-	
+
 	// Execute the request
 	response, err := s.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute HTTP request: %v", err)
 	}
 	defer response.Body.Close()
-	
+
 	// Read the response body
 	respBody, err := ioutil.ReadAll(response.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response body: %v", err)
 	}
-	
+
 	// Check for non-200 status code
 	if response.StatusCode != http.StatusOK {
+		// Try to parse the error response for more details
+		var errorResp struct {
+			Error struct {
+				Code    int    `json:"code"`
+				Message string `json:"message"`
+				Status  string `json:"status"`
+				Details []map[string]interface{} `json:"details"`
+			} `json:"error"`
+		}
+		
+		if err := json.Unmarshal(respBody, &errorResp); err == nil && errorResp.Error.Code != 0 {
+			// Log detailed error information
+			log.Printf("Vector Search API error details:\n" +
+				"  Code: %d\n" +
+				"  Status: %s\n" +
+				"  Message: %s",
+				errorResp.Error.Code, errorResp.Error.Status, errorResp.Error.Message)
+			
+			// Check specifically for UNIMPLEMENTED status
+			if errorResp.Error.Status == "UNIMPLEMENTED" {
+				return nil, fmt.Errorf("Vector Search API returned UNIMPLEMENTED (501) error. This typically means the deployed index is not properly configured or the endpoint is not ready. Check that the index endpoint '%s' and deployed index ID '%s' are correct and the deployment is complete", s.indexEndpointPath, s.deployedIndexID)
+			}
+			
+			return nil, fmt.Errorf("Vector Search API error: %s (code: %d, status: %s)", 
+				errorResp.Error.Message, errorResp.Error.Code, errorResp.Error.Status)
+		}
+		
+		// Fallback to basic error if we couldn't parse the detailed error
 		return nil, fmt.Errorf("API request failed with status code %d: %s", response.StatusCode, string(respBody))
 	}
-	
+
 	// Parse the response
 	var resp struct {
 		NearestNeighbors []struct {
@@ -225,37 +280,37 @@ func (s *VectorStore) FindSimilarChunks(ctx context.Context, queryEmbedding []fl
 			} `json:"neighbors"`
 		} `json:"nearest_neighbors"`
 	}
-	
+
 	if err := json.Unmarshal(respBody, &resp); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal response: %v", err)
 	}
-	
+
 	// Extract chunk IDs
 	var chunkIDs []string
-	
+
 	if len(resp.NearestNeighbors) > 0 && len(resp.NearestNeighbors[0].Neighbors) > 0 {
 		for _, neighbor := range resp.NearestNeighbors[0].Neighbors {
 			chunkIDs = append(chunkIDs, neighbor.DatapointId)
 		}
 	}
-	
+
 	// Retrieve chunks from Firestore
 	var chunks []string
-	
+
 	for _, chunkID := range chunkIDs {
 		doc, err := s.firestoreClient.Collection("document_chunks").Doc(chunkID).Get(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get chunk %s: %v", chunkID, err)
 		}
-		
+
 		content, ok := doc.Data()["content"].(string)
 		if !ok {
 			return nil, fmt.Errorf("invalid content format for chunk %s", chunkID)
 		}
-		
+
 		chunks = append(chunks, content)
 	}
-	
+
 	return chunks, nil
 }
 
@@ -265,11 +320,11 @@ func (s *VectorStore) DeleteDocumentEmbeddings(ctx context.Context, documentID s
 	query := s.firestoreClient.Collection("document_chunks").Where("document_id", "==", documentID)
 	iter := query.Documents(ctx)
 	defer iter.Stop()
-	
+
 	// Extract chunk IDs and collect document references
 	var chunkIDs []string
 	var docRefs []*firestore.DocumentRef
-	
+
 	for {
 		doc, err := iter.Next()
 		if err == iterator.Done {
@@ -278,69 +333,69 @@ func (s *VectorStore) DeleteDocumentEmbeddings(ctx context.Context, documentID s
 		if err != nil {
 			return fmt.Errorf("error iterating document chunks: %v", err)
 		}
-		
+
 		chunkIDs = append(chunkIDs, doc.Ref.ID)
 		docRefs = append(docRefs, doc.Ref)
 	}
-	
+
 	// 2. Delete from Vertex AI Vector Search
 	if len(chunkIDs) > 0 {
 		// Create the request URL for RemoveDatapoints
-		url := fmt.Sprintf("https://%s-aiplatform.googleapis.com/v1/%s:removeDatapoints", 
+		url := fmt.Sprintf("https://%s-aiplatform.googleapis.com/v1/%s:removeDatapoints",
 			s.location, s.indexPath)
-		
+
 		// Create the request body
 		reqBody := map[string]interface{}{
 			"datapoint_ids": chunkIDs,
 		}
-		
+
 		// Marshal the request body to JSON
 		jsonData, err := json.Marshal(reqBody)
 		if err != nil {
 			return fmt.Errorf("failed to marshal request body: %v", err)
 		}
-		
+
 		// Create the HTTP request
 		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
 		if err != nil {
 			return fmt.Errorf("failed to create HTTP request: %v", err)
 		}
-		
+
 		// Set headers
 		req.Header.Set("Content-Type", "application/json")
-		
+
 		// Execute the request
 		response, err := s.httpClient.Do(req)
 		if err != nil {
 			return fmt.Errorf("failed to execute HTTP request: %v", err)
 		}
 		defer response.Body.Close()
-		
+
 		// Read the response body
 		respBody, err := ioutil.ReadAll(response.Body)
 		if err != nil {
 			return fmt.Errorf("failed to read response body: %v", err)
 		}
-		
+
 		// Check for non-200 status code
 		if response.StatusCode != http.StatusOK {
 			return fmt.Errorf("API request failed with status code %d: %s", response.StatusCode, string(respBody))
 		}
 	}
-	
+
 	// 3. Delete from Firestore
 	if len(docRefs) > 0 {
 		batch := s.firestoreClient.Batch()
 		for _, ref := range docRefs {
 			batch.Delete(ref)
 		}
-		
+
 		_, err := batch.Commit(ctx)
 		if err != nil {
 			return fmt.Errorf("failed to delete chunks from Firestore: %v", err)
 		}
 	}
-	
+
 	return nil
 }
 
@@ -351,12 +406,12 @@ func (s *VectorStore) DeleteDocumentEmbeddingsByPrefix(ctx context.Context, pref
 	query := s.firestoreClient.Collection("document_chunks").Where("document_id", ">", prefix).Where("document_id", "<", prefix+"\uf8ff")
 	iter := query.Documents(ctx)
 	defer iter.Stop()
-	
+
 	// Extract chunk IDs and collect document references
 	var chunkIDs []string
 	var docRefs []*firestore.DocumentRef
 	var documentIDs []string
-	
+
 	for {
 		doc, err := iter.Next()
 		if err == iterator.Done {
@@ -365,10 +420,10 @@ func (s *VectorStore) DeleteDocumentEmbeddingsByPrefix(ctx context.Context, pref
 		if err != nil {
 			return fmt.Errorf("error iterating document chunks: %v", err)
 		}
-		
+
 		chunkIDs = append(chunkIDs, doc.Ref.ID)
 		docRefs = append(docRefs, doc.Ref)
-		
+
 		// Extract document ID for logging
 		var data map[string]interface{}
 		if err := doc.DataTo(&data); err == nil {
@@ -377,58 +432,58 @@ func (s *VectorStore) DeleteDocumentEmbeddingsByPrefix(ctx context.Context, pref
 			}
 		}
 	}
-	
+
 	// Log the number of documents found
 	log.Printf("Found %d chunks with document IDs starting with prefix '%s'", len(chunkIDs), prefix)
 	if len(documentIDs) > 0 {
 		log.Printf("Document IDs: %v", documentIDs)
 	}
-	
+
 	// 2. Delete from Vertex AI Vector Search
 	if len(chunkIDs) > 0 {
 		// Create the request URL for RemoveDatapoints
-		url := fmt.Sprintf("https://%s-aiplatform.googleapis.com/v1/%s:removeDatapoints", 
+		url := fmt.Sprintf("https://%s-aiplatform.googleapis.com/v1/%s:removeDatapoints",
 			s.location, s.indexPath)
-		
+
 		// Create the request body
 		reqBody := map[string]interface{}{
 			"datapoint_ids": chunkIDs,
 		}
-		
+
 		// Marshal the request body to JSON
 		jsonData, err := json.Marshal(reqBody)
 		if err != nil {
 			return fmt.Errorf("failed to marshal request body: %v", err)
 		}
-		
+
 		// Create the HTTP request
 		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
 		if err != nil {
 			return fmt.Errorf("failed to create HTTP request: %v", err)
 		}
-		
+
 		// Set headers
 		req.Header.Set("Content-Type", "application/json")
-		
+
 		// Execute the request
 		response, err := s.httpClient.Do(req)
 		if err != nil {
 			return fmt.Errorf("failed to execute HTTP request: %v", err)
 		}
 		defer response.Body.Close()
-		
+
 		// Read the response body
 		respBody, err := ioutil.ReadAll(response.Body)
 		if err != nil {
 			return fmt.Errorf("failed to read response body: %v", err)
 		}
-		
+
 		// Check for non-200 status code
 		if response.StatusCode != http.StatusOK {
 			return fmt.Errorf("API request failed with status code %d: %s", response.StatusCode, string(respBody))
 		}
 	}
-	
+
 	// 3. Delete from Firestore
 	if len(docRefs) > 0 {
 		// Use batched writes for better performance
@@ -439,18 +494,18 @@ func (s *VectorStore) DeleteDocumentEmbeddingsByPrefix(ctx context.Context, pref
 			if end > len(docRefs) {
 				end = len(docRefs)
 			}
-			
+
 			batch := s.firestoreClient.Batch()
 			for _, ref := range docRefs[i:end] {
 				batch.Delete(ref)
 			}
-			
+
 			_, err := batch.Commit(ctx)
 			if err != nil {
 				return fmt.Errorf("failed to delete chunks from Firestore (batch %d-%d): %v", i, end, err)
 			}
 		}
 	}
-	
+
 	return nil
 }

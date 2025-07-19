@@ -7,11 +7,11 @@ import (
 
 // Config holds the service configuration
 type Config struct {
-	Server   ServerConfig
-	OpenAI   OpenAIConfig
-	GCP      GCPConfig
-	Vertex   VertexConfig
-	Claude   ClaudeConfig
+	Server ServerConfig
+	OpenAI OpenAIConfig
+	GCP    GCPConfig
+	Vertex VertexConfig
+	Claude ClaudeConfig
 }
 
 // ServerConfig holds the server configuration
@@ -27,9 +27,9 @@ type OpenAIConfig struct {
 
 // GCPConfig holds the GCP configuration
 type GCPConfig struct {
-	ProjectID    string
+	ProjectID     string
 	StorageBucket string
-	Location     string
+	Location      string
 }
 
 // VertexConfig holds the Vertex AI configuration
