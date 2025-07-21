@@ -11,6 +11,23 @@ import (
 	"github.com/BitwaveCorp/slack-wavie-bot-system-upgraded/services/claude-agent-proxy-svc/internal/openai"
 )
 
+// min returns the smaller of two integers
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// getMapKeys returns a slice of all keys in a map[string]interface{}
+func getMapKeys(m map[string]interface{}) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
 // detectMCPQuery checks if the message is an MCP query and extracts parameters
 // using Claude's intelligence to determine the query type and extract parameters
 func (h *Handler) detectMCPQuery(message string) (*MCPQuery, bool) {
@@ -330,6 +347,15 @@ func (h *Handler) handleWalletsQuery(ctx context.Context, query *MCPQuery, corre
 		return nil, fmt.Errorf("failed to get wallets: %v", err)
 	}
 
+	// Debug log the raw response structure
+	resultJSON, _ := json.Marshal(result)
+	h.logger.Info("Raw wallets response", 
+		"result_type", fmt.Sprintf("%T", result),
+		"has_items", result["items"] != nil,
+		"has_result", result["result"] != nil,
+		"response_preview", string(resultJSON)[:min(200, len(string(resultJSON)))], // Log first 200 chars
+		"correlation_id", correlationID)
+
 	return result, nil
 }
 
@@ -506,17 +532,52 @@ func (h *Handler) formatSymbolInfoResponse(query *MCPQuery, result map[string]in
 
 // formatWalletsResponse formats the response for an organization wallets query
 func (h *Handler) formatWalletsResponse(query *MCPQuery, result map[string]interface{}) (string, map[string]interface{}) {
-	// Extract the wallets data - first check for items array (actual structure)
+	// Log the raw result for debugging
+	resultJSON, _ := json.Marshal(result)
+	h.logger.Info("Formatting wallets response", 
+		"result_keys", getMapKeys(result),
+		"result_length", len(resultJSON))
+
+	// Extract the wallets data using multiple approaches
 	var resultData []interface{}
+	var found bool
 	
-	// Try to get items array first (actual structure from API)
-	if items, hasItems := result["items"].([]interface{}); hasItems {
+	// Approach 1: Try to get items array first (actual structure from API)
+	if items, hasItems := result["items"].([]interface{}); hasItems && len(items) > 0 {
+		h.logger.Info("Found items array in response", "items_count", len(items))
 		resultData = items
-	} else if res, hasResult := result["result"].([]interface{}); hasResult {
-		// Fallback to result array (previous expected structure)
+		found = true
+	} else if res, hasResult := result["result"].([]interface{}); hasResult && len(res) > 0 {
+		// Approach 2: Fallback to result array (previous expected structure)
+		h.logger.Info("Found result array in response", "result_count", len(res))
 		resultData = res
+		found = true
+	} else if resultMap, isMap := result["result"].(map[string]interface{}); isMap {
+		// Approach 3: Check if result is a map that contains items
+		if items, hasItems := resultMap["items"].([]interface{}); hasItems && len(items) > 0 {
+			h.logger.Info("Found items array in result map", "items_count", len(items))
+			resultData = items
+			found = true
+		}
 	} else {
-		h.logger.Error("Failed to parse wallets data", "result", result)
+		// Approach 4: Last resort - try to find any array in the response
+		for key, value := range result {
+			if arr, isArray := value.([]interface{}); isArray && len(arr) > 0 {
+				h.logger.Info("Found array in response under key", "key", key, "count", len(arr))
+				resultData = arr
+				found = true
+				break
+			}
+		}
+	}
+	
+	// If we still couldn't find any wallet data
+	if !found || len(resultData) == 0 {
+		// Log detailed information about the result structure
+		h.logger.Error("Failed to parse wallets data", 
+			"result_type", fmt.Sprintf("%T", result),
+			"result_keys", getMapKeys(result),
+			"raw_result", string(resultJSON)[:min(500, len(string(resultJSON)))])
 		return "❌ Failed to parse wallets data. The response structure was unexpected.", nil
 	}
 
