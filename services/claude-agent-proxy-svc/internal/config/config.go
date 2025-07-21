@@ -55,4 +55,5 @@ type Config struct {
 	Knowledge KnowledgeConfig
 	RAG       RAGConfig
 	BalanceServiceURL string `envconfig:"BALANCE_SERVICE_URL" default:"https://walletbalanceservice-455488113475.us-central1.run.app"`
+	MCPServiceURL    string `envconfig:"MCP_SERVICE_URL" default:"https://bitwave-mcp-via-apis-service-455488113475.us-central1.run.app/"`
 }

@@ -14,6 +14,7 @@ import (
 	"github.com/BitwaveCorp/slack-wavie-bot-system-upgraded/services/claude-agent-proxy-svc/internal/balance"
 	"github.com/BitwaveCorp/slack-wavie-bot-system-upgraded/services/claude-agent-proxy-svc/internal/config"
 	"github.com/BitwaveCorp/slack-wavie-bot-system-upgraded/services/claude-agent-proxy-svc/internal/knowledge"
+	"github.com/BitwaveCorp/slack-wavie-bot-system-upgraded/services/claude-agent-proxy-svc/internal/mcp"
 	"github.com/BitwaveCorp/slack-wavie-bot-system-upgraded/services/claude-agent-proxy-svc/internal/openai"
 )
 
@@ -59,6 +60,36 @@ type ChatResponse struct {
 	CorrelationID string `json:"correlation_id,omitempty"`
 }
 
+// MCPQueryType represents the type of MCP query
+type MCPQueryType string
+
+const (
+	MCPQueryCryptoPrice  MCPQueryType = "crypto_price"
+	MCPQuerySymbolInfo   MCPQueryType = "symbol_info"
+	MCPQueryWallets      MCPQueryType = "wallets"
+	MCPQueryContacts     MCPQueryType = "contacts"
+	MCPQueryCategories   MCPQueryType = "categories"
+	MCPQueryConnections  MCPQueryType = "connections"
+)
+
+// MCPQuery represents a request to query the MCP service
+type MCPQuery struct {
+	Type           string `json:"type"`
+	QueryType      string `json:"query_type"`
+	// Crypto price parameters
+	FromSym        string `json:"from_sym,omitempty"`
+	ToFiat         string `json:"to_fiat,omitempty"`
+	TimestampSEC   int64  `json:"timestamp_sec,omitempty"`
+	Service        string `json:"service,omitempty"`
+	// Symbol info parameters
+	Symbol         string `json:"symbol,omitempty"`
+	// Authentication parameters
+	ClientID       string `json:"client_id,omitempty"`
+	ClientSecret   string `json:"client_secret,omitempty"`
+	// Organization parameters
+	OrgID          string `json:"org_id,omitempty"`
+}
+
 // Handler handles API requests
 type Handler struct {
 	openaiClient *openai.Client
@@ -66,16 +97,18 @@ type Handler struct {
 	logger       *slog.Logger
 	ragConfig    *config.RAGConfig
 	balanceSvc   *balance.Client
+	mcpSvc      *mcp.Client
 }
 
 // NewHandler creates a new API handler
-func NewHandler(openaiClient *openai.Client, logger *slog.Logger, knowledgeRetriever *knowledge.Retriever, ragConfig *config.RAGConfig, balanceSvc *balance.Client) *Handler {
+func NewHandler(openaiClient *openai.Client, logger *slog.Logger, knowledgeRetriever *knowledge.Retriever, ragConfig *config.RAGConfig, balanceSvc *balance.Client, mcpSvc *mcp.Client) *Handler {
 	return &Handler{
 		openaiClient: openaiClient,
 		knowledge:    knowledgeRetriever,
 		logger:       logger,
 		ragConfig:    ragConfig,
 		balanceSvc:   balanceSvc,
+		mcpSvc:      mcpSvc,
 	}
 }
 
@@ -384,6 +417,16 @@ func (h *Handler) handleChatCompletion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Check if this is an MCP query
+	if mcpQuery, isMCP := h.detectMCPQuery(req.Message); isMCP && mcpQuery != nil {
+		h.logger.Info("Detected MCP query", 
+			"correlation_id", req.CorrelationID,
+			"query_type", mcpQuery.QueryType,
+		)
+		h.handleMCPQuery(w, r, mcpQuery, req.CorrelationID)
+		return
+	}
+
 	// Check if this is a balance query
 	if balanceQuery, isBalance := h.detectBalanceQuery(req.Message); isBalance && balanceQuery != nil {
 		h.logger.Info("Detected balance query", 
@@ -395,7 +438,7 @@ func (h *Handler) handleChatCompletion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.logger.Debug("Not a balance query, processing as regular chat completion")
+	h.logger.Debug("Not a balance or MCP query, processing as regular chat completion")
 
 	h.logger.Info("Processing as regular chat completion", "correlation_id", req.CorrelationID)
 

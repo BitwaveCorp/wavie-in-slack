@@ -16,6 +16,7 @@ import (
 	"github.com/BitwaveCorp/slack-wavie-bot-system-upgraded/services/claude-agent-proxy-svc/internal/balance"
 	"github.com/BitwaveCorp/slack-wavie-bot-system-upgraded/services/claude-agent-proxy-svc/internal/config"
 	"github.com/BitwaveCorp/slack-wavie-bot-system-upgraded/services/claude-agent-proxy-svc/internal/knowledge"
+	"github.com/BitwaveCorp/slack-wavie-bot-system-upgraded/services/claude-agent-proxy-svc/internal/mcp"
 	"github.com/BitwaveCorp/slack-wavie-bot-system-upgraded/services/claude-agent-proxy-svc/internal/openai"
 	"github.com/joho/godotenv"
 	"github.com/kelseyhightower/envconfig"
@@ -181,9 +182,11 @@ func main() {
 
 	claudeClient := openai.NewClient(cfg.ClaudeAPIKey, cfg.ClaudeModel, logger)
 	balanceSvc := balance.NewClient(cfg.BalanceServiceURL)
+	// Initialize MCP client
+	mcpSvc := mcp.NewClient(cfg.MCPServiceURL)
 
 	// Initialize the API handler
-	handler := api.NewHandler(claudeClient, logger, knowledgeRetriever, &cfg.RAG, balanceSvc)
+	handler := api.NewHandler(claudeClient, logger, knowledgeRetriever, &cfg.RAG, balanceSvc, mcpSvc)
 
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux)
