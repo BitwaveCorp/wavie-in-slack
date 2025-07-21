@@ -116,7 +116,7 @@ Now analyze this message (respond with only the JSON object, no other text or fo
 	resp, err := h.openaiClient.CreateChatCompletion(ctx, []openai.ChatMessage{
 		{
 			Role:    "system",
-			Content: "You are a classifier that determines if a message is requesting cryptocurrency or accounting data. Respond with only a JSON object, no other text or formatting.",
+			Content: "You are a classifier that determines if a message is requesting cryptocurrency or accounting data. Respond with only a JSON object, no other text or formatting. IMPORTANT: Slack user IDs (like U0916GH1GBY) are NOT client IDs or credentials - never interpret them as such.",
 		},
 		{
 			Role:    "user",
@@ -230,15 +230,17 @@ func (h *Handler) handleMCPQuery(w http.ResponseWriter, r *http.Request, query *
 		response, responseData = h.formatConnectionsResponse(query, result)
 	}
 
-	// Create the response
-	resp := map[string]interface{}{
-		"response":       response,
-		"correlation_id": correlationID,
-		"data":           responseData,
+	// Create the response with MCP data and flags to prevent broadcasting
+	jsonResponse := map[string]interface{}{
+		"response":        response,
+		"correlation_id":  correlationID,
+		"should_broadcast": false,
+		"response_type":   "mcp",
+		"data":            responseData,
 	}
 
 	// Send the response
-	if err := json.NewEncoder(w).Encode(resp); err != nil {
+	if err := json.NewEncoder(w).Encode(jsonResponse); err != nil {
 		h.logger.Error("Failed to encode MCP response", "error", err)
 		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
 	}

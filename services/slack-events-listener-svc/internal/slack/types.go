@@ -87,9 +87,11 @@ type ClaudeRequest struct {
 }
 
 type ClaudeResponse struct {
-	Response      string `json:"response"`
-	CorrelationID string `json:"correlation_id"`
-	Error         string `json:"error,omitempty"`
+	Response       string `json:"response"`
+	CorrelationID  string `json:"correlation_id"`
+	Error          string `json:"error,omitempty"`
+	ShouldBroadcast bool   `json:"should_broadcast,omitempty"`
+	ResponseType   string `json:"response_type,omitempty"`
 }
 
 type BroadcastRequest struct {

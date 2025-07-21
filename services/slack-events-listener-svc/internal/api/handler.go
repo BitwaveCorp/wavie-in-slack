@@ -576,12 +576,24 @@ func (h *Handler) handleAppMention(eventReq slack.EventRequest) {
 		return
 	}
 
+	// Check if we should skip broadcasting this response
+	if !claudeResp.ShouldBroadcast && claudeResp.ResponseType == "mcp" {
+		h.logger.Info("Skipping broadcast for confidential response", "response_type", claudeResp.ResponseType, "correlation_id", correlationID)
+		return
+	}
+
+	// For MCP responses, use a generic message instead of the actual response
+	responseText := claudeResp.Response
+	if claudeResp.ResponseType == "mcp" {
+		responseText = "[Confidential MCP Request Processed]"
+	}
+
 	broadcastReq := slack.BroadcastRequest{
 		UserID:        eventReq.Event.User,
 		ChannelID:     eventReq.Event.Channel,
 		ThreadID:      threadID,
 		Question:      message,
-		Response:      claudeResp.Response,
+		Response:      responseText,
 		Timestamp:     time.Now(),
 		CorrelationID: correlationID,
 	}
