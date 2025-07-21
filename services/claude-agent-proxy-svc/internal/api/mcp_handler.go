@@ -252,6 +252,15 @@ func (h *Handler) handleCryptoPriceQuery(ctx context.Context, query *MCPQuery, c
 		"timestamp_sec", query.TimestampSEC,
 		"correlation_id", correlationID)
 
+	// Check if required parameters are missing
+	if query.FromSym == "" {
+		return nil, fmt.Errorf("missing cryptocurrency symbol. Please provide the cryptocurrency symbol in your request. Example: 'What is the price of BTC in USD?'")
+	}
+
+	if query.ToFiat == "" {
+		return nil, fmt.Errorf("missing fiat currency. Please provide the fiat currency in your request. Example: 'What is the price of BTC in USD?'")
+	}
+
 	// Set default values if not provided
 	if query.Service == "" {
 		query.Service = "cryptocompare"
@@ -277,6 +286,11 @@ func (h *Handler) handleSymbolInfoQuery(ctx context.Context, query *MCPQuery, co
 		"symbol", query.Symbol,
 		"correlation_id", correlationID)
 
+	// Check if required parameters are missing
+	if query.Symbol == "" {
+		return nil, fmt.Errorf("missing cryptocurrency symbol. Please provide the cryptocurrency symbol in your request. Example: 'Tell me about the USDT token' or 'Does Bitwave support BTC?'")
+	}
+
 	// Get the symbol information from the MCP service
 	result, err := h.mcpSvc.LookupSymbol(ctx, query.Symbol)
 	if err != nil {
@@ -291,6 +305,16 @@ func (h *Handler) handleWalletsQuery(ctx context.Context, query *MCPQuery, corre
 	h.logger.Info("Processing wallets query",
 		"org_id", query.OrgID,
 		"correlation_id", correlationID)
+
+	// Check if credentials are missing
+	if query.ClientID == "" || query.ClientSecret == "" {
+		return nil, fmt.Errorf("missing credentials. Please provide your client_id and client_secret in your request. Example: 'Show me all wallets in my org with client_id=abc123 and client_secret=xyz789'")
+	}
+
+	// Check if org_id is missing
+	if query.OrgID == "" {
+		return nil, fmt.Errorf("missing organization ID. Please provide your org_id in your request. Example: 'Show me all wallets in my org with client_id=abc123, client_secret=xyz789, and org_id=org123'")
+	}
 
 	// Get authentication token
 	authResp, err := h.mcpSvc.GetToken(ctx, query.ClientID, query.ClientSecret)
@@ -313,6 +337,16 @@ func (h *Handler) handleContactsQuery(ctx context.Context, query *MCPQuery, corr
 		"org_id", query.OrgID,
 		"correlation_id", correlationID)
 
+	// Check if credentials are missing
+	if query.ClientID == "" || query.ClientSecret == "" {
+		return nil, fmt.Errorf("missing credentials. Please provide your client_id and client_secret in your request. Example: 'Show me all contacts in my org with client_id=abc123 and client_secret=xyz789'")
+	}
+
+	// Check if org_id is missing
+	if query.OrgID == "" {
+		return nil, fmt.Errorf("missing organization ID. Please provide your org_id in your request. Example: 'Show me all contacts in my org with client_id=abc123, client_secret=xyz789, and org_id=org123'")
+	}
+
 	// Get authentication token
 	authResp, err := h.mcpSvc.GetToken(ctx, query.ClientID, query.ClientSecret)
 	if err != nil {
@@ -334,6 +368,16 @@ func (h *Handler) handleCategoriesQuery(ctx context.Context, query *MCPQuery, co
 		"org_id", query.OrgID,
 		"correlation_id", correlationID)
 
+	// Check if credentials are missing
+	if query.ClientID == "" || query.ClientSecret == "" {
+		return nil, fmt.Errorf("missing credentials. Please provide your client_id and client_secret in your request. Example: 'Show me all accounting categories in my org with client_id=abc123 and client_secret=xyz789'")
+	}
+
+	// Check if org_id is missing
+	if query.OrgID == "" {
+		return nil, fmt.Errorf("missing organization ID. Please provide your org_id in your request. Example: 'Show me all accounting categories in my org with client_id=abc123, client_secret=xyz789, and org_id=org123'")
+	}
+
 	// Get authentication token
 	authResp, err := h.mcpSvc.GetToken(ctx, query.ClientID, query.ClientSecret)
 	if err != nil {
@@ -354,6 +398,16 @@ func (h *Handler) handleConnectionsQuery(ctx context.Context, query *MCPQuery, c
 	h.logger.Info("Processing connections query",
 		"org_id", query.OrgID,
 		"correlation_id", correlationID)
+
+	// Check if credentials are missing
+	if query.ClientID == "" || query.ClientSecret == "" {
+		return nil, fmt.Errorf("missing credentials. Please provide your client_id and client_secret in your request. Example: 'Show me all connections in my org with client_id=abc123 and client_secret=xyz789'")
+	}
+
+	// Check if org_id is missing
+	if query.OrgID == "" {
+		return nil, fmt.Errorf("missing organization ID. Please provide your org_id in your request. Example: 'Show me all connections in my org with client_id=abc123, client_secret=xyz789, and org_id=org123'")
+	}
 
 	// Get authentication token
 	authResp, err := h.mcpSvc.GetToken(ctx, query.ClientID, query.ClientSecret)
