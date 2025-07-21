@@ -506,10 +506,18 @@ func (h *Handler) formatSymbolInfoResponse(query *MCPQuery, result map[string]in
 
 // formatWalletsResponse formats the response for an organization wallets query
 func (h *Handler) formatWalletsResponse(query *MCPQuery, result map[string]interface{}) (string, map[string]interface{}) {
-	// Extract the wallets data
-	resultData, ok := result["result"].([]interface{})
-	if !ok {
-		return "❌ Failed to parse wallets data", nil
+	// Extract the wallets data - first check for items array (actual structure)
+	var resultData []interface{}
+	
+	// Try to get items array first (actual structure from API)
+	if items, hasItems := result["items"].([]interface{}); hasItems {
+		resultData = items
+	} else if res, hasResult := result["result"].([]interface{}); hasResult {
+		// Fallback to result array (previous expected structure)
+		resultData = res
+	} else {
+		h.logger.Error("Failed to parse wallets data", "result", result)
+		return "❌ Failed to parse wallets data. The response structure was unexpected.", nil
 	}
 
 	// Format the response
@@ -532,11 +540,34 @@ func (h *Handler) formatWalletsResponse(query *MCPQuery, result map[string]inter
 
 		name := fmt.Sprintf("%v", walletData["name"])
 		id := fmt.Sprintf("%v", walletData["id"])
-		networkID := fmt.Sprintf("%v", walletData["networkId"])
-
+		
+		// Handle different wallet types and structures
 		walletsList.WriteString(fmt.Sprintf("*%d. %s*\n", i+1, name))
 		walletsList.WriteString(fmt.Sprintf("   ID: %s\n", id))
-		walletsList.WriteString(fmt.Sprintf("   Network: %s\n\n", networkID))
+		
+		// Add network ID if available
+		if networkID, hasNetwork := walletData["networkId"]; hasNetwork && networkID != nil && networkID != "" {
+			walletsList.WriteString(fmt.Sprintf("   Network: %v\n", networkID))
+		}
+		
+		// Add wallet type if available
+		if walletType, hasType := walletData["type"]; hasType {
+			walletsList.WriteString(fmt.Sprintf("   Type: %v\n", walletType))
+		}
+		
+		// Add addresses if available
+		if addresses, hasAddresses := walletData["addresses"].([]interface{}); hasAddresses && len(addresses) > 0 {
+			walletsList.WriteString("   Addresses:\n")
+			for j, addr := range addresses {
+				if j >= 2 { // Limit to 2 addresses per wallet
+					walletsList.WriteString(fmt.Sprintf("      ...and %d more\n", len(addresses)-2))
+					break
+				}
+				walletsList.WriteString(fmt.Sprintf("      - %v\n", addr))
+			}
+		}
+		
+		walletsList.WriteString("\n")
 	}
 
 	responseData := map[string]interface{}{
