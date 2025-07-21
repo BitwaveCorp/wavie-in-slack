@@ -519,7 +519,36 @@ func (h *Handler) handleAppMention(eventReq slack.EventRequest) {
 		AgentID:             h.agentID,
 	}
 
+	// Create a channel to signal when response is received
+	responseChan := make(chan bool, 1)
+
+	// Start a goroutine to handle the timeout
+	go func() {
+		// Wait for 10 seconds
+		time.Sleep(10 * time.Second)
+
+		// Check if response was received
+		select {
+		case <-responseChan:
+			// Response was received, do nothing
+			return
+		default:
+			// No response yet, send processing message
+			h.logger.Info("Sending processing message after timeout", "correlation_id", correlationID)
+			h.slackClient.PostMessage(
+				context.Background(),
+				eventReq.Event.Channel,
+				"🔄 Processing your request. This may take up to 60 seconds...",
+				threadID,
+			)
+		}
+	}()
+
+	// Call Claude service
 	claudeResp, err := h.callClaudeService(claudeReq)
+
+	// Signal that response was received
+	responseChan <- true
 	if err != nil {
 		h.logger.Error("Failed to call GPT service", "error", err, "correlation_id", correlationID)
 		h.slackClient.PostMessage(context.Background(), eventReq.Event.Channel, "Sorry, I'm having trouble processing your request right now.", threadID)

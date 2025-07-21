@@ -170,24 +170,6 @@ func (h *Handler) handleMCPQuery(w http.ResponseWriter, r *http.Request, query *
 	// Set content type for the response
 	w.Header().Set("Content-Type", "application/json")
 
-	// Inform the user that the request might take some time
-	processingResponse := ChatResponse{
-		Response:      "🔄 Processing your request. This may take up to 60 seconds...",
-		CorrelationID: correlationID,
-	}
-
-	// Send the processing response
-	if err := json.NewEncoder(w).Encode(processingResponse); err != nil {
-		h.logger.Error("Failed to encode processing response", "error", err)
-		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
-		return
-	}
-
-	// Flush the response to ensure it's sent to the client immediately
-	if flusher, ok := w.(http.Flusher); ok {
-		flusher.Flush()
-	}
-
 	// Process the query based on the query type
 	var result map[string]interface{}
 	var err error
